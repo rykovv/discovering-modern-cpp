@@ -39,7 +39,7 @@ public:
 private:
     int value;
 
-    bool _throw_if_odd (int new_value) {
+    void _throw_if_odd (int new_value) {
         if (new_value % 2 == 0) {
             throw new_value_is_not_even{};
         }
