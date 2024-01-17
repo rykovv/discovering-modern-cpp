@@ -45,6 +45,12 @@ public:
     }
     template<std::size_t ...IterSize>
     void _tuple_inc(std::index_sequence<IterSize...>) {
+        // auto cond_inc = [&](auto&& it) {
+        //     if (*it != end(it)) {
+        //         ++it;
+        //     }
+        // }
+        // (cond_inc(std::get<IterSize>(its))...);
         (++std::get<IterSize>(its), ...);
     }
 
@@ -76,7 +82,6 @@ public:
         // return iter{end(std::get<0>(rs))};
     }
 
-
 private:
     trs rs;
 
@@ -96,11 +101,18 @@ private:
 namespace my_views {
     struct zip_t {
         template<typename ...Ranges>
-        zip_view<Ranges...> operator() (Ranges&& ...ranges) {
-            return zip_view<Ranges...>(std::forward(ranges)...);
+        // zip_view<Ranges...> operator() (Ranges&& ...ranges) noexcept {
+        zip_view<Ranges...> operator() (Ranges& ...ranges) noexcept {
+            return zip_view<Ranges...>{ranges...};
+            // return zip_view<Ranges...>{std::forward<Ranges...>(ranges)...};
         }
     };
     static constexpr zip_t zip;
+
+    // template <typename ...Ranges>
+    // zip_view<Ranges...> operator| (std::tuple<Ranges...> ranges, zip_t) noexcept {
+    //     return zip_view<Ranges...>{std::forward<Ranges>(ranges)...};
+    // }
 }
 
 template<typename TupleT, std::size_t ...IterSize>
@@ -113,7 +125,7 @@ void printTuple (const TupleT& t, std::index_sequence<IterSize...>) {
 int main() {
     std::vector<int> v0 = {1, 4, 7};
     std::vector<int> v1 = {2, 5, 8};
-    std::vector<int> v2 = {3, 6, 9};
+    std::vector<int> v2 = {3, 6};
     
     // using viter = std::vector<int>::iterator;
 
@@ -124,8 +136,11 @@ int main() {
     //     printTuple(*it, std::make_index_sequence<tupSize>{});
     // }
 
+    // auto tups = std::make_tuple(v0, v1, v2);
     // zip_view<std::vector<int>, std::vector<int>, std::vector<int>> zip(v0, v1, v2);
-    for (auto [s0, s1, s2] : my_views::zip(v0, v1, v2)) {
+    my_views::zip_t zip;
+    for (auto [s0, s1, s2] : zip(v0, v1, v2)) {
+    // for (auto [s0, s1, s2] : tups | my_views::zip) {
         std::cout << "{ " << s0 << ", " << s1 << ", " << s2 << " }" << std::endl;
     }
 
