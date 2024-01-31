@@ -1,4 +1,7 @@
 #include <iostream>
+#include <utility>
+#include <type_traits>
+#include <vector>
 
 template <typename ...Ts>
 struct toople {
@@ -19,20 +22,59 @@ public:
 
     template <std::size_t idx>
     decltype(auto) get(toople<Ts...> tpl) {
-        std::size_t offset = offset_at(idx);
+        // std::size_t offset = offset_at(idx);
         
-        // elem_type elem;
-        type_getter<Ts..., idx=='make_index_sequence through the pack'>::type elem;
-        // how do I get the type I need from the parameter pack?
-        memcpy(&elem, tpl.pack[offset], sizeof(elem_type));
+        // decltype(auto) elem = getT<idx>(std::make_index_sequence<sizeof...(Ts)>{});
 
-        return elem;
+        // elem_type elem;
+        // type_getter<Ts..., idx=='make_index_sequence through the pack'>::type elem;
+        // how do I get the type I need from the parameter pack?
+        // memcpy(&elem, &tpl.pack[offset], sizeof(decltype(elem)));
+
+        // return elem;
+        is_right_idx<idx> iri{idx};
+        return (getAlt<Ts, decltype(iri), idx>()...);
     }
     
-    template<typename T, bool Cond = true>
-    struct type_getter {
+    template<typename T, bool Cond>
+    struct type_getter {};
+
+    template<typename T>
+    struct type_getter<T, true> {
         using type = T;
     };
+
+    template <typename std::size_t idx>
+    struct is_right_idx {
+        std::size_t in_idx;
+        bool value = idx == in_idx;
+    };
+
+    template <typename T, typename is_right_index, std::size_t idx>
+    typename type_getter<T, is_right_index<idx>::value>::type
+    getAlt() const {
+        T elem;
+        
+        std::size_t offset = idx;
+        memcpy(&elem, &tpl.pack[offset], sizeof(T));
+        
+        return T;
+    }
+
+    
+
+    
+
+    // template<std::size_t idx, std::size_t ...Szs>
+    // decltype(auto) getT(std::index_sequence<Szs...>) {
+
+    //     ((typename type_getter<Ts, Szs==idx>::type t)..., 0);
+
+    //     // std::vector<> t {type_getter<Ts, idx==Szs>{}...};
+    //     // static_assert( std::is_same<decltype(elem), long long unsigned>::value == true );
+    //     // static_assert(std::is_same_v<decltype(el), long long unsigned>::value == true);
+    //     return 0;
+    // }
 
 private:
     uint8_t* pack;
@@ -62,7 +104,7 @@ private:
 int main() {
     toople<long long unsigned, int, short> t(0, 1, 2);
 
-    // std::cout << t.offset_at(3) << std::endl;
+    std::cout << t.get<1>(t) << std::endl;
 
     return 0;
 }
