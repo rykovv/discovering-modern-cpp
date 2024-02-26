@@ -167,9 +167,46 @@ struct get_index_<T, 0> {
     }
 };
 
+// template <typename T, std::size_t idx = 0, typename ...Ts>
+// decltype(auto) get(toople<Ts...> const& t) {
+//     return get_index_<T, idx>{}(t);
+// }
+
+// different types, don't care idx
+template <typename T0, typename T1, std::size_t idx>
+struct get_up_ {
+    template <typename ...Ts>
+    decltype(auto) operator() (T1 const& prev, toople<Ts...> const& t) {
+        return get_up_<T0, decltype(t.t), idx>{}(t.t, t.ts);
+    }
+};
+
+// same types, non-zero idx
+template <typename T, std::size_t idx>
+struct get_up_<T, T, idx> {
+    // general case
+    template <typename ...Ts>
+    decltype(auto) operator() (T const& prev, toople<Ts...> const& t) {
+        return get_up_<T, decltype(t.t), idx-1>{}(t.t, t.ts);
+    }
+    // overload for a tuple with one elem
+    decltype(auto) operator() (T const& prev, toople<T> const& t) {
+        return get_up_<T, decltype(t.t), idx-1>{}(t.t, t);
+    }
+};
+
+// same types, zero idx
+template <typename T>
+struct get_up_<T, T, 0> {
+    template <typename ...Ts>
+    decltype(auto) operator() (T const& prev, toople<Ts...> const& t) {
+        return prev;
+    }
+};
+
 template <typename T, std::size_t idx = 0, typename ...Ts>
 decltype(auto) get(toople<Ts...> const& t) {
-    return get_index_<T, idx>{}(t);
+    return get_up_<T, decltype(t.t), idx>{}(t.t, t);
 }
 
 int main() {
