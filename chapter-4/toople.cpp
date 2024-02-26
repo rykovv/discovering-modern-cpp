@@ -4,6 +4,7 @@
 #include <vector>
 #include <string>
 #include <algorithm>
+#include <type_traits>
 
 
 namespace attempt0 {
@@ -122,15 +123,70 @@ decltype(auto) get(toople<Ts...> const& t) {
     return get_<idx>{}(t);
 }
 
+template <typename T>
+struct get_no_index_ {
+    template <typename ...Ts>
+    decltype(auto) operator() (toople<Ts...> const& t) {
+        if constexpr (std::is_same_v<T, decltype(t.t)>) {
+            return t.t;
+        } else {
+            return get_no_index_<T>{}(t.ts);
+        }
+    }
+};
+
+template <typename T, typename ...Ts>
+decltype(auto) get_no_index(toople<Ts...> const& t) {
+    return get_no_index_<T>{}(t);
+}
+
+// versitile, but not declarative
+// ASK: how do I make it declarative?
+template <typename T, std::size_t idx>
+struct get_index_ {
+    template <typename ...Ts>
+    decltype(auto) operator() (toople<Ts...> const& t) {
+        if constexpr (std::is_same_v<T, decltype(t.t)>) {
+            if constexpr (idx == 0) {
+                return t.t;
+            } else {
+                return get_index_<T, idx-1>{}(t.ts);
+            }
+        } else {
+            return get_index_<T, idx>{}(t.ts);
+        }
+    }
+};
+
+template <typename T>
+struct get_index_<T, 0> {
+    template <typename ...Ts>
+    decltype(auto) operator() (toople<Ts...> const& t) {
+        if constexpr (std::is_same_v<T, decltype(t.t)>) {
+            return t.t;
+        } else {
+            return get_index_<T, 0>{}(t.ts);
+        }
+    }
+};
+
+template <typename T, std::size_t idx = 0, typename ...Ts>
+decltype(auto) get(toople<Ts...> const& t) {
+    return get_index_<T, idx>{}(t);
+}
+
 int main() {
-    toople<long long unsigned, int, short, double, std::string> t{0, 1, 2, 3.14, "hello, toople!"};
-    // toople<long long unsigned, int, short, double, bool> t{0, 1, 2, 3.14, true};
+    toople<long long unsigned, int, short, double, std::string, std::string> t{0, 1, 2, 3.14, "hello, toople!", "Extra string"};
 
     std::cout << get<0>(t) << std::endl;
     std::cout << get<1>(t) << std::endl;
     std::cout << get<2>(t) << std::endl;
     std::cout << get<3>(t) << std::endl;
     std::cout << get<4>(t) << std::endl;
+
+    std::cout << get<std::string>(t) << std::endl; // hello, toople!
+    std::cout << get<std::string, 1>(t) << std::endl; // Extra string
+
 
     return 0;
 }
