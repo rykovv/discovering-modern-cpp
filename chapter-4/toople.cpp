@@ -142,16 +142,13 @@ decltype(auto) get_no_index(toople<Ts...> const& t) {
 
 // versitile, but not declarative
 // ASK: how do I make it declarative?
+// ASK: how to unify it with get_
 template <typename T, std::size_t idx>
 struct get_index_ {
     template <typename ...Ts>
     decltype(auto) operator() (toople<Ts...> const& t) {
         if constexpr (std::is_same_v<T, decltype(t.t)>) {
-            if constexpr (idx == 0) {
-                return t.t;
-            } else {
-                return get_index_<T, idx-1>{}(t.ts);
-            }
+            return get_index_<T, idx-1>{}(t.ts);
         } else {
             return get_index_<T, idx>{}(t.ts);
         }
