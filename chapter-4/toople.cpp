@@ -102,6 +102,7 @@ struct toople<T> {
     T t;
 };
 
+
 template <std::size_t idx>
 struct get_ {
     template <typename ...Ts>
@@ -209,11 +210,11 @@ decltype(auto) get(toople<Ts...> const& t) {
     return get_up_<T, decltype(t.t), idx>{}(t.t, t);
 }
 
-template <typename T, std::size_t idx = 0>
+template <typename T, std::size_t idx>
 struct get_idx_by_type {
     template <typename ...Ts>
     constexpr std::size_t operator() (toople<Ts...> const& t) {
-        if (std::is_same_v<T, decltype(t.t)>) {
+        if constexpr (std::is_same_v<T, decltype(t.t)>) {
             return 1 + get_idx_by_type<T, idx-1>{}(t.ts);
         } else {
             return 1 + get_idx_by_type<T, idx>{}(t.ts);
@@ -222,40 +223,50 @@ struct get_idx_by_type {
 
     template <typename R>
     constexpr std::size_t operator() (toople<R> const& t) {
-        if (std::is_same_v<T, R>) {
+        static_assert(idx == 0, "Toople index out of bounds.");
+        return 0;
+    }
+};
+
+template <typename T>
+struct get_idx_by_type<T, 0> {
+    template <typename ...Ts>
+    constexpr std::size_t operator() (toople<Ts...> const& t) {
+        if constexpr (std::is_same_v<T, decltype(t.t)>) {
             return 0;
-            // return 1 + get_idx_by_type<T, idx-1>{}(t);
         } else {
-            static_assert(false, "Out of bounds");
-            // return 1 + get_idx_by_type<T, idx>{}(t);
+            return 1 + get_idx_by_type<T, 0>{}(t.ts);
+        }
+    }
+
+    template <typename R>
+    constexpr std::size_t operator() (toople<R> const& t) {
+        if constexpr (std::is_same_v<T, R>) {
+            return 0;
+        } else {
+            static_assert(std::is_same_v<T, R>, "Toople index out of bounds.");
         }
     }
 };
 
-// template <typename T>
-// struct get_idx_by_type<T, 0> {
-//     template <typename ...Ts>
-//     constexpr std::size_t operator() (toople<Ts...> const& t) {
-//         if (std::is_same_v<T, decltype(t.t)>) {
-//             return 0;
-//         } else {
-//             return 1 + get_idx_by_type<T, 0>{}(t.ts);
-//         }
-//     }
+template <typename T, std::size_t idx = 0, typename ...Ts>
+constexpr decltype(auto) get_idx(toople<Ts...> const& t) {
+    return get_idx_by_type<T, idx>{}(t);
+}
 
-//     template <typename R>
-//     constexpr std::size_t operator() (toople<R> const& t) {
-//         if (std::is_same_v<T, R>) {
-//             return 0;
-//         } else {
-//             return 200;
-//             // static_assert(std::is_same_v<T, R>, "Toople index out of bounds.");
-//         }
-//     }
-// };
+template <typename ...Ts>
+toople<Ts...> make_toople(Ts ...ts) {
+    return toople<Ts...>{ts...};
+}
+
+template <typename T, std::size_t idx = 0, typename ...Ts>
+constexpr decltype(auto) get_i(const toople<Ts...> t) {
+    return get_<get_idx_by_type<T, idx>{}(t)>{}(t);
+}
 
 int main() {
-    toople<long long unsigned, int, short, double, std::string, std::string> t{0, 1, 2, 3.14, "hello, toople!", "Extra string"};
+    toople<long long unsigned, short, int, double, std::string, std::string> t{0, 1, 2, 3.14, "hello, toople!", "Extra string"};
+    // auto t = make_toople(0, 1, 2, 3.14, "hello, toople!", "Extra string");
 
     std::cout << get<0>(t) << std::endl;
     std::cout << get<1>(t) << std::endl;
@@ -266,12 +277,16 @@ int main() {
     std::cout << get<std::string>(t) << std::endl; // hello, toople!
     std::cout << get<std::string, 1>(t) << std::endl; // Extra string
 
-    std::cout << get_idx_by_type<long long unsigned>{}(t) << std::endl;
+    std::cout << get_idx<long long unsigned>(t) << std::endl;
     // std::cout << get_idx_by_type<int>{}(t) << std::endl;
     // std::cout << get_idx_by_type<short>{}(t) << std::endl;
     // std::cout << get_idx_by_type<double>{}(t) << std::endl;
-    std::cout << get_idx_by_type<std::string>{}(t) << std::endl;
-    std::cout << get_idx_by_type<std::string, 1>{}(t) << std::endl;
+    std::cout << get_idx<std::string>(t) << std::endl;
+    std::cout << get_idx<std::string, 1>(t) << std::endl;
+    // std::cout << get_idx<float>(t) << std::endl;
+
+    std::cout << get_i<std::string>(t) << std::endl; // hello, toople!
+    std::cout << get_i<std::string, 1>(t) << std::endl; // Extra string
 
     return 0;
 }
