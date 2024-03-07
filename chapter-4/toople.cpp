@@ -264,6 +264,34 @@ constexpr decltype(auto) get_i(const toople<Ts...> t) {
     return get_<get_idx_by_type<T, idx>{}(t)>{}(t);
 }
 
+
+template <typename Toople, typename ...Tooples>
+struct toople_cat_ {
+    decltype(Toople::T) t;
+    toople_cat_<decltype(Toople::ts), Tooples...> tooples;
+};
+
+template <typename Toople>
+struct toople_cat_<Toople> {
+    typename Toople::T t;
+    toople_cat_<decltype(Toople::ts)> toople;
+};
+
+template <typename T>
+struct toople_cat_<toople<T>> {
+    T t;
+};
+
+template <typename Toople, typename ...Tooples>
+constexpr decltype(auto) toople_cat (const Toople t, const Tooples ...ts) {
+    return toople_cat_<Toople, Tooples...>{t, ts...};
+}
+
+template <typename ...Ts, typename ...Tooples>
+constexpr decltype(auto) toople_cat1 (const toople<Ts...> t, const Tooples ...ts) {
+    return toople<decltype(t.t), Ts...>{t.t, t.ts, ts...};
+}
+
 int main() {
     toople<long long unsigned, short, int, double, std::string, std::string> t{0, 1, 2, 3.14, "hello, toople!", "Extra string"};
     // auto t = make_toople(0, 1, 2, 3.14, "hello, toople!", "Extra string");
@@ -287,6 +315,11 @@ int main() {
 
     std::cout << get_i<std::string>(t) << std::endl; // hello, toople!
     std::cout << get_i<std::string, 1>(t) << std::endl; // Extra string
+
+    toople<std::string, std::string> t0 {"toople 0 1", "toople 0 2"};
+    toople<std::string, std::string> t1 {"toople 1 1", "toople 1 2"};
+
+    auto tt = toople_cat(t0, t1);
 
     return 0;
 }
