@@ -102,6 +102,15 @@ std::vector<U> map(std::vector<R> v, std::function<U(R)> f) {
     }
 }
 
+template <typename T>
+T fold(std::vector<T> v, std::function<T(T,T)> f, T init) {
+    if ( is_empty(v) ) {
+        return init;
+    } else {
+        return f(front(v), fold(rest(v), f, init));
+    }
+}
+
 double square (int n) {
     return double(n*n);
 }
@@ -110,14 +119,33 @@ std::string to_string(double d) {
     return std::to_string(d);
 }
 
+int add (int a, int b) {
+    return a + b;
+}
+
+int mult (int a, int b) {
+    return a * b;
+}
+
+template <typename T>
+T sum(std::vector<T> v) {
+    return fold<int>(v, add, 0);
+}
+
+// reverse?
+
 int main(void) {
     std::vector<int> v = {1,2,3,4,5};
     std::vector<double> vd = map<int, double>(v, square);
-    std::vector<std::string> vds = map<double, std::string>(vd, to_string);
+    // std::vector<std::string> vds = map<double, std::string>(vd, to_string);
 
     print(v);
     print(vd);
-    print(vds);
+    // print(vds);
+
+    std::cout << "sum = " << sum(v) << std::endl;
+    std::cout << "fold mult = " << fold<int>(v, mult, 1) << std::endl;
+
 
     return 0;
 }
