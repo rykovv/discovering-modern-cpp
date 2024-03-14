@@ -71,6 +71,12 @@ std::vector<T> add_to_front(T v, std::vector<T> vs) {
 }
 
 template<typename T>
+std::vector<T> add_to_back(T v, std::vector<T> vs) {
+    vs.emplace_back(v);
+    return vs;
+}
+
+template<typename T>
 bool is_empty(std::vector<T> vs) {
     return vs.empty();
 }
@@ -93,10 +99,10 @@ std::vector<T> rest(std::vector<T> vs) {
     }
 }
 
-template <typename R, typename U>
-std::vector<U> map(std::vector<R> v, std::function<U(R)> f) {
+template <typename T, typename R>
+std::vector<R> map(std::vector<T> v, std::function<R(T)> f) {
     if ( is_empty(v) ) {
-        return empty<U>();
+        return empty<R>();
     } else {
         return add_to_front( f(front(v)), map(rest(v), f) );
     }
@@ -104,6 +110,16 @@ std::vector<U> map(std::vector<R> v, std::function<U(R)> f) {
 
 template <typename T>
 T fold(std::vector<T> v, std::function<T(T,T)> f, T init) {
+    if ( is_empty(v) ) {
+        return init;
+    } else {
+        return f(front(v), fold(rest(v), f, init));
+    }
+}
+
+// more generic form for reverse
+template <typename T, typename R>
+R fold(std::vector<T> v, std::function<R(T,R)> f, R init) {
     if ( is_empty(v) ) {
         return init;
     } else {
@@ -129,23 +145,32 @@ int mult (int a, int b) {
 
 template <typename T>
 T sum(std::vector<T> v) {
+    // why do I need to indicate fold template arg and do not in reverse?
     return fold<int>(v, add, 0);
 }
 
-// reverse?
+template <typename T>
+std::vector<T> reverse(std::vector<T> v) {
+    std::vector<T> init{};
+    // why I dont need to indicate fold template args and do in sum?
+    return fold(v, add_to_back<T>, init);
+}
 
 int main(void) {
     std::vector<int> v = {1,2,3,4,5};
-    std::vector<double> vd = map<int, double>(v, square);
-    // std::vector<std::string> vds = map<double, std::string>(vd, to_string);
-
     print(v);
+
+    std::vector<double> vd = map<int, double>(v, square);
     print(vd);
+
+    // std::vector<std::string> vds = map<double, std::string>(vd, to_string);
     // print(vds);
 
     std::cout << "sum = " << sum(v) << std::endl;
     std::cout << "fold mult = " << fold<int>(v, mult, 1) << std::endl;
 
+    auto vr = reverse<int>(v);
+    print(vr);
 
     return 0;
 }
