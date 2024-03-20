@@ -254,9 +254,22 @@ constexpr decltype(auto) get_idx(toople<Ts...> const& t) {
     return get_idx_by_type<T, idx>{}(t);
 }
 
+struct make_toople_ {
+    template <typename T, typename ...Ts>
+    toople<T, Ts...> operator() (T t, Ts ...ts) {
+        make_toople_ mt;
+        return toople<T, Ts...>{t, mt(ts...)};
+    }
+    template <typename T>
+    toople<T> operator() (T t) {
+        return toople<T>{t};
+    }
+};
+
 template <typename ...Ts>
 toople<Ts...> make_toople(Ts ...ts) {
-    return toople<Ts...>{ts...};
+    make_toople_ mt;
+    return mt(ts...);
 }
 
 template <typename T, std::size_t idx = 0, typename ...Ts>
@@ -265,46 +278,81 @@ constexpr decltype(auto) get_i(const toople<Ts...> t) {
 }
 
 
-template <typename Toople, typename ...Tooples>
-struct toople_cat_ {
-    decltype(Toople::T) t;
-    toople_cat_<decltype(Toople::ts), Tooples...> tooples;
+// template <typename Toople, typename ...Tooples>
+// struct toople_cat_ {
+//     decltype(Toople::T) t;
+//     toople_cat_<decltype(Toople::ts), Tooples...> tooples;
+// };
+
+// template <typename Toople>
+// struct toople_cat_<Toople> {
+//     typename Toople::T t;
+//     toople_cat_<decltype(Toople::ts)> toople;
+// };
+
+// template <typename T>
+// struct toople_cat_<toople<T>> {
+//     T t;
+// };
+
+// template <typename Toople, typename ...Tooples>
+// constexpr decltype(auto) toople_cat (const Toople t, const Tooples ...ts) {
+//     return toople_cat_<Toople, Tooples...>{t, ts...};
+// }
+
+// template <typename ...Ts, typename ...Tooples>
+// constexpr decltype(auto) toople_cat1 (const toople<Ts...> t, const Tooples ...ts) {
+//     return toople<decltype(t.t), Ts...>{t.t, t.ts, ts...};
+// }
+
+struct toople_printer {
+public:
+    template <typename ...Ts>
+    void operator()(toople<Ts...> t) {
+        std::cout << "{ " << t.t << " ";
+        printer(t.ts);
+    }
+private:
+    template <typename ...Ts>
+    void printer(toople<Ts...> t) {
+        std::cout << t.t << " ";
+        printer(t.ts);
+    }
+    template <typename T>
+    void printer(toople<T> t) {
+        std::cout << t.t << " }" << std::endl;
+    }
 };
 
-template <typename Toople>
-struct toople_cat_<Toople> {
-    typename Toople::T t;
-    toople_cat_<decltype(Toople::ts)> toople;
+template <typename ...Rs>
+struct toople_cat {
+    template <typename T, typename ...Ts>
+    decltype(auto) operator() (toople<T, Ts...> t0, toople<Rs...> t1) {
+        toople_cat<Rs...> tcat;
+        return toople<T, Ts..., Rs...>{t0.t, tcat(t0.ts, t1)};
+    }
+
+    template <typename T>
+    decltype(auto) operator() (toople<T> t0, toople<Rs...> t1) {
+        return toople<T, Rs...>{t0.t, t1};
+    }
 };
-
-template <typename T>
-struct toople_cat_<toople<T>> {
-    T t;
-};
-
-template <typename Toople, typename ...Tooples>
-constexpr decltype(auto) toople_cat (const Toople t, const Tooples ...ts) {
-    return toople_cat_<Toople, Tooples...>{t, ts...};
-}
-
-template <typename ...Ts, typename ...Tooples>
-constexpr decltype(auto) toople_cat1 (const toople<Ts...> t, const Tooples ...ts) {
-    return toople<decltype(t.t), Ts...>{t.t, t.ts, ts...};
-}
 
 int main() {
     toople<long long unsigned, short, int, double, std::string, std::string> t{0, 1, 2, 3.14, "hello, toople!", "Extra string"};
-    // auto t = make_toople(0, 1, 2, 3.14, "hello, toople!", "Extra string");
 
+    // get by index
     std::cout << get<0>(t) << std::endl;
     std::cout << get<1>(t) << std::endl;
     std::cout << get<2>(t) << std::endl;
     std::cout << get<3>(t) << std::endl;
     std::cout << get<4>(t) << std::endl;
 
+    // get by type and type order index
     std::cout << get<std::string>(t) << std::endl; // hello, toople!
     std::cout << get<std::string, 1>(t) << std::endl; // Extra string
 
+    // get index by type
     std::cout << get_idx<long long unsigned>(t) << std::endl;
     // std::cout << get_idx_by_type<int>{}(t) << std::endl;
     // std::cout << get_idx_by_type<short>{}(t) << std::endl;
@@ -313,13 +361,22 @@ int main() {
     std::cout << get_idx<std::string, 1>(t) << std::endl;
     // std::cout << get_idx<float>(t) << std::endl;
 
+    // get by type using get by index
     std::cout << get_i<std::string>(t) << std::endl; // hello, toople!
     std::cout << get_i<std::string, 1>(t) << std::endl; // Extra string
 
+    // toople cat
     toople<std::string, std::string> t0 {"toople 0 1", "toople 0 2"};
     toople<std::string, std::string> t1 {"toople 1 1", "toople 1 2"};
 
-    auto tt = toople_cat(t0, t1);
+    toople_cat<std::string, std::string> tc;
+    auto tt = tc(t0, t1);
+    toople_printer printer;
+    printer(tt);
+
+    // make toople
+    auto mkt = make_toople(0, 1, 2, 3.14, "hello, toople!", "Extra string");
+    printer(mkt);
 
     return 0;
 }
