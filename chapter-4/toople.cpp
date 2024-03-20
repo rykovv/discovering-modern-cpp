@@ -338,6 +338,11 @@ struct toople_cat {
     }
 };
 
+// empty toople
+struct empty_toople {};
+template <>
+struct toople<empty_toople> {};
+
 int main() {
     toople<long long unsigned, short, int, double, std::string, std::string> t{0, 1, 2, 3.14, "hello, toople!", "Extra string"};
 
@@ -377,6 +382,8 @@ int main() {
     // make toople
     auto mkt = make_toople(0, 1, 2, 3.14, "hello, toople!", "Extra string");
     printer(mkt);
+
+    // auto empty = toople<>{};
 
     return 0;
 }
