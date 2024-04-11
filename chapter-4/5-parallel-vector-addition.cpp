@@ -90,7 +90,7 @@ int pick(int from, int thru) {
 
 int main() {
     vector sizes(4);
-    sizes[0] = 100; sizes[1] = 1000; sizes[2] = 10000; sizes[3] = 100000;
+    sizes[0] = 10000; sizes[1] = 100000; sizes[2] = 1000000; sizes[3] = 10000000;
     
     for (int i = 0; i < sizes.size() - 1; i++) {
         vector v00(sizes[i]);
@@ -113,7 +113,7 @@ int main() {
             // v11[j] = pick(0, 10);
         }
 
-        std::chrono::time_point<std::chrono::high_resolution_clock> start0 = std::chrono::steady_clock::now();
+        std::chrono::time_point<std::chrono::steady_clock> start0 = std::chrono::steady_clock::now();
 
         std::thread thread0 (
             [&res0, &v00, &v01] () {
@@ -133,10 +133,11 @@ int main() {
         
         std::cout << "[" << res0[0] << ", " << res0[1] << ", ... , " << res0[res0.size()-2] << ", " << res0[res0.size()-1] << "]" << std::endl;
         std::cout << "[" << res1[0] << ", " << res1[1] << ", ... , " << res1[res1.size()-2] << ", " << res1[res1.size()-1] << "]" << std::endl;
-        const auto thread0time = std::chrono::duration_cast<std::chrono::milliseconds>(end0 - start0).count();
-        std::cout << "Calculation for " << sizes[i] << " vector took " << thread0time << std::endl;
-        std::cout << "Calculation for " << sizes[i+1] << " vector took ";// << std::chrono::duration_cast<std::chrono::milliseconds>(end1 - end0) << std::endl;
+        const auto thread0time = std::chrono::duration_cast<std::chrono::microseconds>(end0 - start0).count();
+        const auto thread1time = std::chrono::duration_cast<std::chrono::microseconds>(end1 - end0).count();
+        std::cout << "Calculation for " << sizes[i] << " vector took " << thread0time << "us" << std::endl;
+        std::cout << "Calculation for " << sizes[i+1] << " vector took " << thread1time << "us" << std::endl;
     }
 
-  return 0;
+    return 0;
 }
