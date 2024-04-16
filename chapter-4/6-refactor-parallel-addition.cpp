@@ -100,54 +100,103 @@ vector vector_sum(const vector& lhs, const vector& rhs) {
 int main() {
     std::cout << std::thread::hardware_concurrency() << " threads available.\n";
 
-    std::list<std::future<vector>> lf (std::thread::hardware_concurrency());
+    std::list<std::future<vector>> lf;
 
-    vector sizes(4);
-    sizes[0] = 10000; sizes[1] = 100000; sizes[2] = 1000000; sizes[3] = 10000000;
-    
+    vector sizes(std::thread::hardware_concurrency());
+    sizes[0] = 5;
+    for (int i = 1; i < sizes.size(); i++) {
+        sizes[i] = sizes[i-1]*5;
+    }
+
     std::chrono::time_point<std::chrono::steady_clock> start = std::chrono::steady_clock::now();
 
-    for (int ati = 0; ati < std::thread::hardware_concurrency(); ati+=2) {
-        for (int i = 0; i < sizes.size() - 1; i++) {
-            vector v00(sizes[i]);
-            vector v01(sizes[i]);
-            vector res0(sizes[i]);
-            vector v10(sizes[i+1]);
-            vector v11(sizes[i+1]);
-            vector res1(sizes[i+1]);
+    for (int i = 0; i < sizes.size() - 1; i++) {
+        vector v00(sizes[i]);
+        vector v01(sizes[i]);
+        vector res0(sizes[i]);
+        vector v10(sizes[i+1]);
+        vector v11(sizes[i+1]);
+        vector res1(sizes[i+1]);
 
-            for (int j = 0; j < sizes[i]; j++) {
-                v00[j] = pick(std::numeric_limits<int>::min(), std::numeric_limits<int>::max());
-                v01[j] = pick(std::numeric_limits<int>::min(), std::numeric_limits<int>::max());
-                // v00[j] = pick(0, 10);
-                // v01[j] = pick(0, 10);
-            }
-            for (int j = 0; j < sizes[i+1]; j++) {
-                v10[j] = pick(std::numeric_limits<int>::min(), std::numeric_limits<int>::max());
-                v11[j] = pick(std::numeric_limits<int>::min(), std::numeric_limits<int>::max());
-                // v10[j] = pick(0, 10);
-                // v11[j] = pick(0, 10);
-            }
-
-            lf.emplace_back(
-                std::async(vector_sum, v00, v01)
-            );
-            lf.emplace_back(
-                std::async(vector_sum, v10, v11)
-            );
+        for (int j = 0; j < sizes[i]; j++) {
+            v00[j] = pick(std::numeric_limits<int>::min(), std::numeric_limits<int>::max());
+            v01[j] = pick(std::numeric_limits<int>::min(), std::numeric_limits<int>::max());
+            // v00[j] = pick(0, 10);
+            // v01[j] = pick(0, 10);
         }
+        for (int j = 0; j < sizes[i+1]; j++) {
+            v10[j] = pick(std::numeric_limits<int>::min(), std::numeric_limits<int>::max());
+            v11[j] = pick(std::numeric_limits<int>::min(), std::numeric_limits<int>::max());
+            // v10[j] = pick(0, 10);
+            // v11[j] = pick(0, 10);
+        }
+
+        lf.emplace_back(
+            std::async(vector_sum, v00, v01)
+        );
+        lf.emplace_back(
+            std::async(vector_sum, v10, v11)
+        );
     }
 
     auto end = std::chrono::steady_clock::now();
     
     const auto threadtime = std::chrono::duration_cast<std::chrono::seconds>(end - start).count();
+    
     std::cout << "Whole calculation took " << threadtime << "us" << std::endl;
-
-    for (auto it = lf.begin(); it != lf.end(); ++it) {
-    // for (auto f : lf) {
-        auto res = it->get();
+    std::cout << "Results: " << std::endl;
+    
+    for (auto & it : lf) {
+        auto res = it.get();
         std::cout << "[" << res[0] << ", " << res[1] << ", ... , " << res[res.size()-2] << ", " << res[res.size()-1] << "]" << std::endl;
     }
 
     return 0;
 }
+
+// long long unsigned vector_accum(const vector& v) {
+//     std::cout << "talking from a thread " << std::this_thread::get_id() << " id" << std::endl;
+//     long long unsigned res = 0;
+//     for (int i = 0; i < v.size(); i++) {
+//         res += v[i];
+//     }
+//     return res;
+// }
+// 
+// int main() {
+//     std::cout << std::thread::hardware_concurrency() << " threads available.\n";
+
+//     std::list<std::future<long long unsigned>> lf;
+
+//     vector sizes(std::thread::hardware_concurrency());
+//     sizes[0] = 1;
+//     for (int i = 1; i < sizes.size(); i++) {
+//         sizes[i] = sizes[i-1]*10;
+//     }
+    
+//     std::chrono::time_point<std::chrono::steady_clock> start = std::chrono::steady_clock::now();
+
+//     for (int i = 0; i < std::thread::hardware_concurrency(); i++) {
+//         vector v (sizes[i]);
+
+//         for (int j = 0; j < sizes[i]; j++) {
+//             v[j] = pick(std::numeric_limits<int>::min(), std::numeric_limits<int>::max());
+//         }
+
+//         lf.emplace_back(
+//             std::async(vector_accum, v)
+//         ); 
+//     }
+
+//     auto end = std::chrono::steady_clock::now();
+    
+//     const auto threadtime = std::chrono::duration_cast<std::chrono::seconds>(end - start).count();
+//     std::cout << "Whole calculation took " << threadtime << "us" << std::endl;
+
+//     for (auto it = lf.begin(); it != lf.end(); ++it) {
+//         auto res = it->get();
+//         std::cout << "[" << res << "]" << std::endl;
+//     }
+
+//     return 0;
+// }
