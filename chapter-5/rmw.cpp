@@ -14,11 +14,6 @@ concept FieldSelectable = requires {
     msb >= lsb
 );
 
-template <typename T>
-concept MaskTrait = requires {
-    T::mask;
-};
-
 template <typename T, unsigned msb, unsigned lsb>
 requires FieldSelectable<T, msb, lsb>
 struct rmw {
@@ -37,6 +32,27 @@ struct rmw {
     static constexpr T update (T old_value, T new_value) {
         return (old_value & ~mask) | (new_value & mask);
     }
+};
+
+template <typename T>
+concept MaskTrait = requires {
+    T::mask;
+};
+
+template <typename ...Fields>
+struct rmw_register {};
+
+template <typename Field>
+requires MaskTrait<Field>
+struct rmw_register<Field> {
+    Field field;
+};
+
+template <typename Field, typename ...Fields>
+requires MaskTrait<Field>
+struct rmw_register<Field, Fields...> {
+    Field field;
+    rmw_register<Fields...> rest;
 };
 
 int main() {
