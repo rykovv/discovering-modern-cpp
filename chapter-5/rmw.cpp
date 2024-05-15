@@ -59,8 +59,7 @@ struct rmw_reg {
     static constexpr value_type layout = (F0::mask | ... | Fs::mask);
 
     static constexpr bool needs_read (value_type new_value) {
-        return ((F0::mask & new_value > 0) && ... && (Fs::mask & new_value > 0));
-        // return ((F0::mask & new_value > 0) && ... && (Fs::mask & new_value > 0));
+        return !(((F0::mask & new_value) > 0) && (((Fs::mask & new_value) > 0) && ...));
     }
 
     static constexpr value_type update (value_type old_value, value_type new_value) {
