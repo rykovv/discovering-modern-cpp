@@ -38,11 +38,19 @@ template <typename T, char... Chars>
 }
 }
 
-template <typename Reg, unsigned msb, unsigned lsb, std::size_t ci = 0>
+enum class AccessType {
+    RO,
+    RW
+};
+
+template <typename Reg, unsigned msb, unsigned lsb, AccessType at, std::size_t ci = 0>
 requires FieldSelectable<typename Reg::value_type, msb, lsb>
 struct field {
     using value_type = typename Reg::value_type;
+    using reg = Reg;
+
     static constexpr value_type init = ci;
+    static constexpr AccessType access_type = at;
 
     static constexpr value_type mask = []() {
         if (msb != lsb) {
@@ -61,9 +69,17 @@ struct field {
     {}
 
     constexpr auto operator= (auto const& rhs) -> field & {
+        static_assert(access_type != AccessType::RO, "cannot write read-only field");
         using rhs_type = std::remove_reference_t<decltype(rhs)>;
         static_assert(rhs_type::init <= (mask >> lsb), "assigned value greater than allowed");
-        constexpr value_type max = mask >> lsb;
+        value = rhs.value;
+        return *this;
+    }
+
+    constexpr auto operator= (auto && rhs) -> field & {
+        static_assert(access_type != AccessType::RO, "cannot write read-only field");
+        using rhs_type = std::remove_reference_t<decltype(rhs)>;
+        static_assert(rhs_type::init <= (mask >> lsb), "assigned value greater than allowed");
         value = rhs.value;
         return *this;
     }
@@ -75,23 +91,30 @@ struct field {
     value_type value;
 };
 
-template <typename ...Ts>
-concept MaskTrait = requires {
-    (Ts::mask,...);
-};
+template <typename T>
+constexpr bool is_field_v = false;
 
-template <typename T, typename ...Ts>
-concept OfSameValueType = (std::same_as<typename T::value_type, typename Ts::value_type> && ...);
+template <typename Reg, unsigned msb, unsigned lsb, AccessType at, std::size_t ci>
+constexpr bool is_field_v<field<Reg, msb, lsb, at, ci>> = true;
 
-template <typename T, typename ...Ts>
-concept Fieldable = MaskTrait<T, Ts...> && OfSameValueType<T, Ts...>;
 
-template <typename Field0, typename ...Fields>
-requires Fieldable<Field0, Fields...>
-struct rmw_fields {
-    using value_type = typename Field0::value_type;
-    static constexpr value_type layout = (Field0::mask | ... | Fields::mask);
-};
+// template <typename ...Ts>
+// concept MaskTrait = requires {
+//     (Ts::mask,...);
+// };
+
+// template <typename T, typename ...Ts>
+// concept OfSameValueType = (std::same_as<typename T::value_type, typename Ts::value_type> && ...);
+
+// template <typename T, typename ...Ts>
+// concept Fieldable = MaskTrait<T, Ts...> && OfSameValueType<T, Ts...>;
+
+// template <typename Field0, typename ...Fields>
+// requires Fieldable<Field0, Fields...>
+// struct rmw_fields {
+//     using value_type = typename Field0::value_type;
+//     static constexpr value_type layout = (Field0::mask | ... | Fields::mask);
+// };
 
 template <typename T, std::size_t addr>
 struct reg {
@@ -116,16 +139,37 @@ template <char ...Chars>
 constexpr auto operator""_f () {
     using T = std::size_t; // platform max
     constexpr T new_value = ros::detail::to_compile_time_constant<T, Chars...>();
+    
     std::cout << "<new value>_f = " << new_value << std::endl;
-    using dummy = struct reg {using value_type = std::size_t;};
-    using pass = field<dummy, std::numeric_limits<T>::digits-1, 0, new_value>;
-    return pass{};
+    
+    using dummy = struct reg {using value_type = T;};
+    return field<dummy, std::numeric_limits<T>::digits-1, 0, AccessType::RW, new_value>{};
 }
 }
 
 template<typename ...Fields>
-void apply(Fields ...fields) {
+void apply(Fields ...fields);
 
+template<typename Field, typename ...Fields>
+requires(is_field_v<Field> && (is_field_v<Fields> && ...)) &&
+        (std::is_same_v<typename Field::reg, typename Fields::reg> && ...)
+void apply(Field field, Fields ...fields) {
+    // optimization cases
+    // 1. No read needed
+    //   (a) there's only one RW field (goto)
+    //   (b) all of the fields are written
+    // 2. No more than one write to the same field allowed
+    // 3. No more than one read to the same field/reg allowed
+
+    // need to learn how to filter a parameter pack
+    // filter based on a RW AccessType and examine size_of...
+
+    // check all RW fields of the register are written
+    // and partial masks of the fields and compare with the reg layout?
+    //   maybe will need to exlude RO fields from the layout
+    // need to learn how to iterate over a struct to create a layout first
+
+    // finally enforcement rules
 }
 
 template<>
@@ -134,10 +178,10 @@ void apply() {};
 }
 
 struct my_reg : ros::reg<uint32_t, 0x2000> {
-    ros::field<my_reg, 4, 0>   field0;
-    ros::field<my_reg, 12, 8>  field1;
-    ros::field<my_reg, 20, 16> field2;
-    ros::field<my_reg, 31, 28> field3;
+    ros::field<my_reg, 4, 0, ros::AccessType::RW>   field0;
+    ros::field<my_reg, 12, 8, ros::AccessType::RW>  field1;
+    ros::field<my_reg, 20, 16, ros::AccessType::RW> field2;
+    ros::field<my_reg, 31, 28, ros::AccessType::RW> field3;
 };
 
 using namespace ros::literals;
