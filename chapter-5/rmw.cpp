@@ -43,13 +43,13 @@ enum class AccessType {
     RW
 };
 
-template <typename Reg, unsigned msb, unsigned lsb, AccessType at>
+template <typename Reg, unsigned msb, unsigned lsb, AccessType AT>
 requires FieldSelectable<typename Reg::value_type, msb, lsb>
 struct field {
     using value_type = typename Reg::value_type;
     using reg = Reg;
 
-    static constexpr AccessType access_type = at;
+    static constexpr AccessType access_type = AT;
 
     static constexpr value_type mask = []() {
         if (msb != lsb) {
@@ -102,8 +102,8 @@ struct field {
 template <typename T>
 constexpr bool is_field_v = false;
 
-template <typename Reg, unsigned msb, unsigned lsb, AccessType at>
-constexpr bool is_field_v<field<Reg, msb, lsb, at>> = true;
+template <typename Reg, unsigned msb, unsigned lsb, AccessType AT>
+constexpr bool is_field_v<field<Reg, msb, lsb, AT>> = true;
 
 
 // template <typename ...Ts>
@@ -149,9 +149,7 @@ constexpr auto operator""_f () {
     constexpr T new_value = ros::detail::to_compile_time_constant<T, Chars...>();
     
     std::cout << "<new value>_f = " << new_value << std::endl;
-    
-    // using dummy = struct reg {using value_type = T;};
-    // return field<dummy, std::numeric_limits<T>::digits-1, 0, AccessType::RW, new_value>{};
+
     return std::integral_constant<T, new_value>{};
 }
 }
@@ -200,6 +198,26 @@ int main() {
     my_reg r0;
     apply(r0.field0 = 10_f,
           r0.field1 = 12_f);
+          
+    // read
+    // uint16_t value;
+    // apply(r0.field0.read(value));
+    // read-modify-write
+    // apply(r0.field0([](auto v) {
+    //     return v*2;
+    // }));
+
+    // need to learn how to iterate over a struct
+    // write whole reg
+    // checks attempts to write RO fields
+    // apply(r0 = 2032_r);
+    // read while reg
+    // uint32_t value;
+    // apply(r0.read(value));
+    // read-modify-write
+    // apply(r0([](auto v) {
+    //     return v*2;
+    // }));
     
     // return v;
     return r0.field0.value;
