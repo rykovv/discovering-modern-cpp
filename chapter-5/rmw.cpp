@@ -43,13 +43,12 @@ enum class AccessType {
     RW
 };
 
-template <typename Reg, unsigned msb, unsigned lsb, AccessType at, std::size_t ci = 0>
+template <typename Reg, unsigned msb, unsigned lsb, AccessType at>
 requires FieldSelectable<typename Reg::value_type, msb, lsb>
 struct field {
     using value_type = typename Reg::value_type;
     using reg = Reg;
 
-    static constexpr value_type init = ci;
     static constexpr AccessType access_type = at;
 
     static constexpr value_type mask = []() {
@@ -65,8 +64,17 @@ struct field {
     }();
 
     constexpr field()
-        : value{init}
+        : value{0}
     {}
+
+    template <typename U, U val>
+    requires (std::is_convertible_v<U, value_type>)
+    constexpr auto operator= (std::integral_constant<U, val>) -> field & {
+        static_assert(access_type != AccessType::RO, "cannot write read-only field");
+        static_assert(val <= (mask >> lsb), "assigned value greater than allowed");
+        value = val;
+        return *this;
+    }
 
     constexpr auto operator= (auto const& rhs) -> field & {
         static_assert(access_type != AccessType::RO, "cannot write read-only field");
@@ -94,8 +102,8 @@ struct field {
 template <typename T>
 constexpr bool is_field_v = false;
 
-template <typename Reg, unsigned msb, unsigned lsb, AccessType at, std::size_t ci>
-constexpr bool is_field_v<field<Reg, msb, lsb, at, ci>> = true;
+template <typename Reg, unsigned msb, unsigned lsb, AccessType at>
+constexpr bool is_field_v<field<Reg, msb, lsb, at>> = true;
 
 
 // template <typename ...Ts>
@@ -142,8 +150,9 @@ constexpr auto operator""_f () {
     
     std::cout << "<new value>_f = " << new_value << std::endl;
     
-    using dummy = struct reg {using value_type = T;};
-    return field<dummy, std::numeric_limits<T>::digits-1, 0, AccessType::RW, new_value>{};
+    // using dummy = struct reg {using value_type = T;};
+    // return field<dummy, std::numeric_limits<T>::digits-1, 0, AccessType::RW, new_value>{};
+    return std::integral_constant<T, new_value>{};
 }
 }
 
