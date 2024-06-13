@@ -4,9 +4,6 @@
 #include <iostream>
 #include <type_traits>
 
-struct ml {
-    unsigned long long int v;
-};
 
 template <unsigned v, unsigned m>
 struct rmw_assignment {
@@ -16,6 +13,35 @@ struct rmw_assignment {
 struct rmw_read {
 
 };
+
+template <typename T> struct unsafe_cast_ferry {
+  private:
+    T v;
+
+  public:
+    constexpr explicit(true) unsafe_cast_ferry(T new_value)
+        : v{new_value} {}
+
+    [[nodiscard]] constexpr auto value() const -> T { return v; }
+};
+
+template <typename T, char... Chars>
+[[nodiscard]] static constexpr auto to_compile_time_constant() -> T {
+    // FIXME: handle or fail at compile-time for invalid strings
+    constexpr T value = []() {
+        constexpr std::array<char, sizeof...(Chars)> chars{Chars...};
+        T sum = 0;
+
+        for (char c : chars) {
+            T const digit = c - '0';
+            sum = (sum * 10) + digit;
+        }
+
+        return sum;
+    }();
+
+    return value;
+}
 
 template <typename T, unsigned msb, unsigned lsb>
 concept FieldSelectable = requires {
@@ -28,10 +54,11 @@ concept FieldSelectable = requires {
     msb >= lsb
 );
 
-template <typename Reg, typename T, unsigned msb, unsigned lsb>
+template <typename Reg, typename T, unsigned msb, unsigned lsb, unsigned ci = 0>
 requires FieldSelectable<T, msb, lsb>
 struct rmw {
     using value_type = T;
+    static constexpr value_type init = ci;
 
     static constexpr value_type mask = []() {
         if (msb != lsb) {
@@ -45,16 +72,32 @@ struct rmw {
         }
     }();
 
+    constexpr rmw()
+        : value{init}
+    {}
+
+    template <typename U>
+    requires(std::is_convertible_v<value_type, U>)
+    constexpr rmw(unsafe_cast_ferry<U> ferry)
+        : value {static_cast<value_type>(ferry.value())} 
+    {
+        // std::cout << "ferry ctor " << ferry.value() << std::endl;
+    }
+
+    constexpr auto operator= (auto const& rhs) -> rmw & {
+        using rhs_type = std::remove_reference_t<decltype(rhs)>;
+        static_assert(rhs_type::init <= (mask >> lsb), "assigned value greater than allowed");
+        constexpr value_type max = mask >> lsb;
+        // rmw_assignment<init, max> rmwa;
+        value = rhs.value;
+        return *this;
+    }
+
     static constexpr value_type update (value_type old_value, value_type new_value) {
         return (old_value & ~mask) | (new_value & mask);
     }
 
-    consteval rmw& operator= (value_type const new_value) {
-        // static_assert(new_value <= (mask >> lsb), "assigned value greater than allowed");
-        constexpr value_type max = mask >> lsb;
-        rmw_assignment<new_value, max> rmwa;
-        return *this;
-    }
+    value_type value;
 };
 
 template <typename ...Ts>
@@ -90,6 +133,19 @@ struct rmw_reg {
     }
 };
 
+template <char ...Chars>
+constexpr auto operator""_f () {
+    using T = std::size_t; // platform max
+    constexpr T new_value = to_compile_time_constant<T, Chars...>();
+    // constexpr value_type max = mask >> lsb;
+    // rmw_assignment<new_value, 100> rmwa;
+    std::cout << "<new value>_f = " << new_value << std::endl;
+    using dummy = void;
+    using pass = rmw<dummy, T, std::numeric_limits<T>::digits-1, 0, new_value>;
+    return pass(unsafe_cast_ferry{new_value});
+    // return new_value;
+}
+
 template<typename ...Fields>
 void apply(Fields ...fields) {
 
@@ -97,14 +153,6 @@ void apply(Fields ...fields) {
 
 template<>
 void apply() {};
-
-
-// template<size_t V>
-// struct rmw_integral_constant : std::integral_constant<size_t, V> {};
-
-consteval auto operator""_c(unsigned long long int v) {
-    return v;
-}
 
 // // delayed declaration
 // template <typename T = void>
@@ -137,8 +185,8 @@ int main() {
     // std::cout << std::hex << v << std::endl;
     my_reg r0;
     // my_reg::field0::write(23);
-    apply(r0.field0 = 23_c,
-          r0.field1 = 42_c);
+    apply(r0.field0 = 10_f,
+          r0.field1 = 42_f);
     // std::cout << std::hex << reg0::layout << std::endl;
 
     // reg0::field0::write(23);
@@ -150,4 +198,5 @@ int main() {
     // std::cout << std::hex << reg0::needs_read(0xFFFFFFFF) << std::endl;
 
     // return v;
+    return r0.field0.value;
 }
