@@ -22,19 +22,18 @@ namespace detail {
 
 template <char Char>
 struct is_decimal_digit {
-    static constexpr bool value = Char - '0' > 0 && Char - '0' < 9;
+    static constexpr bool value = Char - '0' >= 0 && Char - '0' <= 9;
 };
 
 template <char Char>
 constexpr bool is_decimal_digit_v = ros::detail::is_decimal_digit<Char>::value;
 
 template <char ...Chars>
-concept DecimalDigits = (ros::detail::is_decimal_digit_v<Chars> && ...);
+concept DecimalNumber = (ros::detail::is_decimal_digit_v<Chars> && ...);
 
 template <typename T, char... Chars>
-requires DecimalDigits<Chars...>
+requires DecimalNumber<Chars...>
 [[nodiscard]] static constexpr auto to_unsigned_const() -> T {
-    // FIXME: handle or fail at compile-time for invalid strings
     constexpr T value = []() {
         constexpr std::array<char, sizeof...(Chars)> chars{Chars...};
         T sum = 0;
@@ -42,6 +41,53 @@ requires DecimalDigits<Chars...>
         for (char c : chars) {
             T const digit = c - '0';
             sum = (sum * 10) + digit;
+        }
+
+        return sum;
+    }();
+
+    return value;
+}
+
+template <char Char>
+struct is_x {
+    static constexpr bool value = Char == 'x';
+};
+template <char Char>
+constexpr bool is_x_v = ros::detail::is_x<Char>::value;
+
+template <char Char>
+struct is_0 {
+    static constexpr bool value = Char == '0';
+};
+template <char Char>
+constexpr bool is_0_v = ros::detail::is_0<Char>::value;
+
+template <char Char>
+struct is_hex_char {
+    static constexpr bool value = ros::detail::is_decimal_digit_v<Char> || 
+    (Char - 'A' >= 0 && Char - 'F' < 6 || Char - 'a' >= 0 && Char - 'f' < 6);
+};
+template <char Char>
+constexpr bool is_hex_char_v = ros::detail::is_hex_char<Char>::value;
+
+template <char Char0, char Char1, char ...Chars>
+concept HexadecimalNumber = (
+    ros::detail::is_0_v<Char0> &&
+    ros::detail::is_x_v<Char1> &&
+    (ros::detail::is_hex_char_v<Chars> && ...)
+);
+
+template <typename T, char Char0, char Char1, char... Chars>
+requires HexadecimalNumber<Char0, Char1, Chars...>
+[[nodiscard]] static constexpr auto to_unsigned_const() -> T {
+    constexpr T value = []() {
+        constexpr std::array<char, sizeof...(Chars)> chars{Chars...};
+        T sum = 0;
+
+        for (char c : chars) {
+            T const digit = c - '0' > 9? c >= 'a'? c - 'a' + 10 : c - 'A' + 10 : c - '0';
+            sum = (sum * 16) + digit;
         }
 
         return sum;
@@ -162,7 +208,7 @@ constexpr auto operator""_f () {
     using T = std::size_t; // platform max
     constexpr T new_value = ros::detail::to_unsigned_const<T, Chars...>();
     
-    // std::cout << "<new value>_f = " << new_value << std::endl;
+    std::cout << "<new value>_f = " << new_value << std::endl;
 
     return std::integral_constant<T, new_value>{};
 }
@@ -226,7 +272,7 @@ using namespace ros::literals;
 int main() {
     
     my_reg r0;
-    apply(r0.field0 = 15_f,
+    apply(r0.field0 = 0xf_f,
           r0.field1 = 12_f);
 
     // read
