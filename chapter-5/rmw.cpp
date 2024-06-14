@@ -20,17 +20,20 @@ concept FieldSelectable = requires {
 
 namespace detail {
 
-template <typename T>
-constexpr bool is_digit_v = false;
+template <char Char>
+struct is_digit {
+    static constexpr bool value = Char - '0' > 0 && Char - '0' < 9;
+};
 
 template <char Char>
-constexpr bool is_digit_v<Char> = Char - '0' > 0 && Char - '0' < 9;
+constexpr bool is_digit_v = ros::detail::is_digit<Char>::value;
 
-template <char Char>
-concept IntegerDigits = requires(ros::detail::is_digit_v<Char>);
+template <char ...Chars>
+concept IntegerDigits = (ros::detail::is_digit_v<Chars> && ...);
 
 template <typename T, char... Chars>
-[[nodiscard]] static constexpr auto to_compile_time_constant() -> T {
+requires IntegerDigits<Chars...>
+[[nodiscard]] static constexpr auto to_unsigned_const() -> T {
     // FIXME: handle or fail at compile-time for invalid strings
     constexpr T value = []() {
         constexpr std::array<char, sizeof...(Chars)> chars{Chars...};
@@ -158,7 +161,7 @@ namespace literals {
 template <char ...Chars>
 constexpr auto operator""_f () {
     using T = std::size_t; // platform max
-    constexpr T new_value = ros::detail::to_compile_time_constant<T, Chars...>();
+    constexpr T new_value = ros::detail::to_unsigned_const<T, Chars...>();
     
     // std::cout << "<new value>_f = " << new_value << std::endl;
 
