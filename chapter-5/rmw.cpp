@@ -199,9 +199,15 @@ void apply() {};
 }
 
 template <typename T, typename Reg, unsigned msb, unsigned lsb, ros::AccessType AT>
-requires (std::unsigned_integral<T> && 
-          std::is_convertible_v<typename Reg::value_type, T>) &&
-          (std::numeric_limits<T>::digits >= msb - lsb) // unsafe assignement
+concept SafeAssignable = requires {
+    requires std::unsigned_integral<T>;
+} && ( 
+    std::is_convertible_v<typename Reg::value_type, T> &&
+    std::numeric_limits<T>::digits >= msb - lsb
+);
+
+template <typename T, typename Reg, unsigned msb, unsigned lsb, ros::AccessType AT>
+requires SafeAssignable<T, Reg, msb, lsb, AT>
 constexpr T& operator<= (T & lhs, ros::field<Reg, msb, lsb, AT> const& rhs) {
     // can call apply from here
     lhs = rhs.value;
