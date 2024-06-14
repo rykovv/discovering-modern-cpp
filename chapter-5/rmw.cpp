@@ -201,7 +201,8 @@ void apply() {};
 
 template <typename T, typename Reg, unsigned Msb, unsigned Lsb, ros::AccessType AT>
 requires (std::unsigned_integral<T> && 
-          std::is_convertible_v<typename Reg::value_type, T>)
+          std::is_convertible_v<typename Reg::value_type, T>) &&
+          (std::numeric_limits<T>::digits >= Msb - Lsb) // unsafe assignement
 constexpr T& operator<= (T & lhs, const ros::field<Reg, Msb, Lsb, AT> & rhs) {
     // can call apply from here
     lhs = rhs.value;
