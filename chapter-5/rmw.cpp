@@ -167,7 +167,6 @@ constexpr auto operator""_f () {
 
     return std::integral_constant<T, new_value>{};
 }
-}
 
 template<typename ...Fields>
 void apply(Fields ...fields);
@@ -197,6 +196,16 @@ void apply(Field field, Fields ...fields) {
 template<>
 void apply() {};
 
+}
+}
+
+template <typename T, typename Reg, unsigned Msb, unsigned Lsb, ros::AccessType AT>
+requires (std::unsigned_integral<T> && 
+          std::is_convertible_v<typename Reg::value_type, T>)
+constexpr T& operator<= (T & lhs, const ros::field<Reg, Msb, Lsb, AT> & rhs) {
+    // can call apply from here
+    lhs = rhs.value;
+    return lhs;
 }
 
 struct my_reg : ros::reg<uint32_t, 0x2000> {
@@ -233,7 +242,8 @@ int main() {
     // apply(r0([](auto v) {
     //     return v*2;
     // }));
-    
+    uint8_t v; 
+    v <= r0.field0;
     // return v;
-    return r0.field0.value;
+    return v;
 }
