@@ -56,13 +56,12 @@ enum class AccessType {
     RW
 };
 
-template <typename Reg, unsigned Msb, unsigned Lsb, AccessType AT>
-requires FieldSelectable<typename Reg::value_type, Msb, Lsb>
+template <typename Reg, unsigned msb, unsigned lsb, AccessType AT>
+requires FieldSelectable<typename Reg::value_type, msb, lsb>
 struct field {
     using value_type = typename Reg::value_type;
     using reg = Reg;
-    static constexpr unsigned msb = Msb;
-    static constexpr unsigned lsb = Lsb;
+    static constexpr unsigned length = msb - lsb;
 
     static constexpr AccessType access_type = AT;
 
@@ -94,7 +93,7 @@ struct field {
     constexpr auto operator= (auto const& rhs) -> field & {
         static_assert(access_type != AccessType::RO, "cannot write read-only field");
         using rhs_type = std::remove_reference_t<decltype(rhs)>;
-        static_assert(rhs_type::msb - rhs_type::lsb <= msb - lsb, "larger field cannot be safely assigned to a narrower one");
+        static_assert(rhs_type::length <= msb - lsb, "larger field cannot be safely assigned to a narrower one");
         value = rhs.value;
         return *this;
     }
@@ -102,7 +101,7 @@ struct field {
     constexpr auto operator= (auto && rhs) -> field & {
         static_assert(access_type != AccessType::RO, "cannot write read-only field");
         using rhs_type = std::remove_reference_t<decltype(rhs)>;
-        static_assert(rhs_type::msb - rhs_type::lsb <= msb - lsb, "larger field cannot be safely assigned to a narrower one");
+        static_assert(rhs_type::length <= msb - lsb, "larger field cannot be safely assigned to a narrower one");
         value = rhs.value;
         return *this;
     }
@@ -199,11 +198,11 @@ void apply() {};
 }
 }
 
-template <typename T, typename Reg, unsigned Msb, unsigned Lsb, ros::AccessType AT>
+template <typename T, typename Reg, unsigned msb, unsigned lsb, ros::AccessType AT>
 requires (std::unsigned_integral<T> && 
           std::is_convertible_v<typename Reg::value_type, T>) &&
-          (std::numeric_limits<T>::digits >= Msb - Lsb) // unsafe assignement
-constexpr T& operator<= (T & lhs, const ros::field<Reg, Msb, Lsb, AT> & rhs) {
+          (std::numeric_limits<T>::digits >= msb - lsb) // unsafe assignement
+constexpr T& operator<= (T & lhs, ros::field<Reg, msb, lsb, AT> const& rhs) {
     // can call apply from here
     lhs = rhs.value;
     return lhs;
