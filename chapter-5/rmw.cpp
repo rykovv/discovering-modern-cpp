@@ -19,6 +19,16 @@ concept FieldSelectable = requires {
 );
 
 namespace detail {
+
+template <typename T>
+constexpr bool is_digit_v = false;
+
+template <char Char>
+constexpr bool is_digit_v<Char> = Char - '0' > 0 && Char - '0' < 9;
+
+template <char Char>
+concept IntegerDigits = requires(ros::detail::is_digit_v<Char>);
+
 template <typename T, char... Chars>
 [[nodiscard]] static constexpr auto to_compile_time_constant() -> T {
     // FIXME: handle or fail at compile-time for invalid strings
@@ -43,11 +53,13 @@ enum class AccessType {
     RW
 };
 
-template <typename Reg, unsigned msb, unsigned lsb, AccessType AT>
-requires FieldSelectable<typename Reg::value_type, msb, lsb>
+template <typename Reg, unsigned Msb, unsigned Lsb, AccessType AT>
+requires FieldSelectable<typename Reg::value_type, Msb, Lsb>
 struct field {
     using value_type = typename Reg::value_type;
     using reg = Reg;
+    static constexpr unsigned msb = Msb;
+    static constexpr unsigned lsb = Lsb;
 
     static constexpr AccessType access_type = AT;
 
@@ -79,7 +91,7 @@ struct field {
     constexpr auto operator= (auto const& rhs) -> field & {
         static_assert(access_type != AccessType::RO, "cannot write read-only field");
         using rhs_type = std::remove_reference_t<decltype(rhs)>;
-        static_assert(rhs_type::init <= (mask >> lsb), "assigned value greater than allowed");
+        static_assert(rhs_type::msb - rhs_type::lsb <= msb - lsb, "larger field cannot be safely assigned to a narrower one");
         value = rhs.value;
         return *this;
     }
@@ -87,7 +99,7 @@ struct field {
     constexpr auto operator= (auto && rhs) -> field & {
         static_assert(access_type != AccessType::RO, "cannot write read-only field");
         using rhs_type = std::remove_reference_t<decltype(rhs)>;
-        static_assert(rhs_type::init <= (mask >> lsb), "assigned value greater than allowed");
+        static_assert(rhs_type::msb - rhs_type::lsb <= msb - lsb, "larger field cannot be safely assigned to a narrower one");
         value = rhs.value;
         return *this;
     }
@@ -148,7 +160,7 @@ constexpr auto operator""_f () {
     using T = std::size_t; // platform max
     constexpr T new_value = ros::detail::to_compile_time_constant<T, Chars...>();
     
-    std::cout << "<new value>_f = " << new_value << std::endl;
+    // std::cout << "<new value>_f = " << new_value << std::endl;
 
     return std::integral_constant<T, new_value>{};
 }
@@ -156,7 +168,7 @@ constexpr auto operator""_f () {
 
 template<typename ...Fields>
 void apply(Fields ...fields);
-
+ 
 template<typename Field, typename ...Fields>
 requires(is_field_v<Field> && (is_field_v<Fields> && ...)) &&
         (std::is_same_v<typename Field::reg, typename Fields::reg> && ...)
@@ -164,7 +176,7 @@ void apply(Field field, Fields ...fields) {
     // optimization cases
     // 1. No read needed
     //   (a) there's only one RW field (goto)
-    //   (b) all of the fields are written
+    //   (b) all of the RW fields are written
     // 2. No more than one write to the same field allowed
     // 3. No more than one read to the same field/reg allowed
 
@@ -196,9 +208,9 @@ using namespace ros::literals;
 int main() {
     
     my_reg r0;
-    apply(r0.field0 = 10_f,
+    apply(r0.field0 = 15_f,
           r0.field1 = 12_f);
-          
+
     // read
     // uint16_t value;
     // apply(r0.field0.read(value));
