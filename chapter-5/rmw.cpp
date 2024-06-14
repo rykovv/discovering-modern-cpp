@@ -21,18 +21,18 @@ concept FieldSelectable = requires {
 namespace detail {
 
 template <char Char>
-struct is_digit {
+struct is_decimal_digit {
     static constexpr bool value = Char - '0' > 0 && Char - '0' < 9;
 };
 
 template <char Char>
-constexpr bool is_digit_v = ros::detail::is_digit<Char>::value;
+constexpr bool is_decimal_digit_v = ros::detail::is_decimal_digit<Char>::value;
 
 template <char ...Chars>
-concept IntegerDigits = (ros::detail::is_digit_v<Chars> && ...);
+concept DecimalDigits = (ros::detail::is_decimal_digit_v<Chars> && ...);
 
 template <typename T, char... Chars>
-requires IntegerDigits<Chars...>
+requires DecimalDigits<Chars...>
 [[nodiscard]] static constexpr auto to_unsigned_const() -> T {
     // FIXME: handle or fail at compile-time for invalid strings
     constexpr T value = []() {
