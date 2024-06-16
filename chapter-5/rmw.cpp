@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <iostream>
 #include <type_traits>
+#include <tuple>
 
 // Register Optimization with Safety (ROS)
 
@@ -156,6 +157,11 @@ struct field {
         return (old_value & ~mask) | (new_value & mask);
     }
 
+    constexpr auto read() const {
+        // to be substituted with read template expr
+        return *this;
+    }
+
     value_type value;
 };
 
@@ -219,7 +225,7 @@ void apply(Fields ...fields);
 template<typename Field, typename ...Fields>
 requires(is_field_v<Field> && (is_field_v<Fields> && ...)) &&
         (std::is_same_v<typename Field::reg, typename Fields::reg> && ...)
-void apply(Field field, Fields ...fields) {
+std::tuple<typename Field::value_type, typename Fields::value_type...> apply(Field field, Fields ...fields) {
     // optimization cases
     // 1. No read needed
     //   (a) there's only one RW field (goto)
@@ -236,6 +242,9 @@ void apply(Field field, Fields ...fields) {
     // need to learn how to iterate over a struct to create a layout first
 
     // finally enforcement rules
+
+    // to be filtered out by read
+    return std::make_tuple(field.value, fields.value...);
 }
 
 template<>
@@ -272,8 +281,20 @@ using namespace ros::literals;
 int main() {
     
     my_reg r0;
+
+    // multi-field write syntax
     apply(r0.field0 = 0xf_f,
           r0.field1 = 12_f);
+
+    // multi-field read syntax
+    auto [f2, f3] = apply(r0.field2.read(),
+                          r0.field3.read());
+
+    // multi-field write/read syntax
+    // auto [f2, f3] = apply(r0.field0 = 0xf_f,
+    //                       r0.field1 = 12_f,
+    //                       r0.field2.read(),
+    //                       r0.field3.read());
 
     // read
     // uint16_t value;
@@ -294,8 +315,11 @@ int main() {
     // apply(r0([](auto v) {
     //     return v*2;
     // }));
-    uint8_t v; 
+
+    // single-field read syntax
+    uint8_t v;
     v <= r0.field0;
+    
     // return v;
     return v;
 }
