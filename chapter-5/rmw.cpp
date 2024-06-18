@@ -172,23 +172,23 @@ template <typename Reg, unsigned msb, unsigned lsb, AccessType AT>
 constexpr bool is_field_v<field<Reg, msb, lsb, AT>> = true;
 
 
-// template <typename ...Ts>
-// concept MaskTrait = requires {
-//     (Ts::mask,...);
-// };
+template <typename ...Ts>
+concept HasMask = requires {
+    (Ts::mask,...);
+};
 
-// template <typename T, typename ...Ts>
-// concept OfSameValueType = (std::same_as<typename T::value_type, typename Ts::value_type> && ...);
+template <typename T, typename ...Ts>
+concept OfSameParentReg = (std::same_as<typename T::reg, typename Ts::reg> && ...);
 
-// template <typename T, typename ...Ts>
-// concept Fieldable = MaskTrait<T, Ts...> && OfSameValueType<T, Ts...>;
+template <typename T, typename ...Ts>
+concept Fieldable = HasMask<T, Ts...> && OfSameParentReg<T, Ts...>;
 
-// template <typename Field0, typename ...Fields>
-// requires Fieldable<Field0, Fields...>
-// struct rmw_fields {
-//     using value_type = typename Field0::value_type;
-//     static constexpr value_type layout = (Field0::mask | ... | Fields::mask);
-// };
+template <typename Field0, typename ...Fields>
+requires Fieldable<Field0, Fields...>
+struct fields {
+    using value_type = typename Field0::value_type;
+    static constexpr value_type layout = (Field0::mask | ... | Fields::mask);
+};
 
 template <typename T, std::size_t addr>
 struct reg {
@@ -217,6 +217,7 @@ constexpr auto operator""_f () {
     std::cout << "<new value>_f = " << new_value << std::endl;
 
     return std::integral_constant<T, new_value>{};
+}
 }
 
 template<typename ...Fields>
@@ -250,9 +251,6 @@ std::tuple<typename Field::value_type, typename Fields::value_type...> apply(Fie
 template<>
 void apply() {};
 
-}
-}
-
 template <typename T, typename Reg, unsigned msb, unsigned lsb, ros::AccessType AT>
 concept SafeAssignable = requires {
     requires std::unsigned_integral<T>;
@@ -268,12 +266,21 @@ constexpr T& operator<= (T & lhs, ros::field<Reg, msb, lsb, AT> const& rhs) {
     lhs = rhs.value;
     return lhs;
 }
+}
 
 struct my_reg : ros::reg<uint32_t, 0x2000> {
-    ros::field<my_reg, 4, 0, ros::AccessType::RW>   field0;
-    ros::field<my_reg, 12, 8, ros::AccessType::RW>  field1;
-    ros::field<my_reg, 20, 16, ros::AccessType::RW> field2;
-    ros::field<my_reg, 31, 28, ros::AccessType::RW> field3;
+    using Field0 = ros::field<my_reg, 4, 0, ros::AccessType::RW>;
+    using Field1 = ros::field<my_reg, 12, 8, ros::AccessType::RW>;
+    using Field2 = ros::field<my_reg, 20, 16, ros::AccessType::RW>;
+    using Field3 = ros::field<my_reg, 31, 28, ros::AccessType::RW>;
+
+    Field0 field0;
+    Field1 field1;
+    Field2 field2;
+    Field3 field3;
+
+    using fields = ros::fields<
+        Field0, Field1, Field2, Field3>;
 };
 
 using namespace ros::literals;
@@ -318,7 +325,7 @@ int main() {
 
     // single-field read syntax
     uint8_t v;
-    v <= r0.field0;
+    // v <= r0.field0;
     
     // return v;
     return v;
