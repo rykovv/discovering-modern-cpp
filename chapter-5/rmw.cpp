@@ -269,23 +269,99 @@ constexpr T& operator<= (T & lhs, ros::field<Reg, msb, lsb, AT> const& rhs) {
 }
 
 struct my_reg : ros::reg<uint32_t, 0x2000> {
-    using Field0 = ros::field<my_reg, 4, 0, ros::AccessType::RW>;
-    using Field1 = ros::field<my_reg, 12, 8, ros::AccessType::RW>;
-    using Field2 = ros::field<my_reg, 20, 16, ros::AccessType::RW>;
-    using Field3 = ros::field<my_reg, 31, 28, ros::AccessType::RW>;
-
-    Field0 field0;
-    Field1 field1;
-    Field2 field2;
-    Field3 field3;
-
-    using fields = ros::fields<
-        Field0, Field1, Field2, Field3>;
+    ros::field<my_reg, 4, 0, ros::AccessType::RW> field0;
+    ros::field<my_reg, 12, 8, ros::AccessType::RW> field1;
+    ros::field<my_reg, 20, 16, ros::AccessType::RW> field2;
+    ros::field<my_reg, 31, 28, ros::AccessType::RW> field3;
 };
+
+
+// how does this work???
+
+namespace structured {
+struct UniversalType {
+    template<typename T>
+    operator T() {}
+};
+
+template<typename T>
+consteval auto MemberCounter(auto ...Members) {
+    if constexpr (requires { T{ Members... }; } == false)
+        return sizeof...(Members) - 1 - 1; // ros::reg has address member
+    else
+        return MemberCounter<T>(Members..., UniversalType{});
+}
+
+template <typename T>
+constexpr auto forwarder(T && t) {
+    return std::forward<T>(t);
+}
+
+template<typename T, unsigned S>
+struct to_tuple_helper {};
+
+template <typename T>
+struct to_tuple_helper<T, 0> {
+    constexpr auto operator() (T const& t) const {
+        return std::make_tuple();
+    }
+};
+
+template <typename T>
+struct to_tuple_helper<T, 1> {
+    constexpr auto operator() (T const& t) const {
+        auto&& [f0] = forwarder(t);
+        return std::make_tuple(f0);
+    }
+};
+
+template <typename T>
+struct to_tuple_helper<T, 2> {
+    constexpr auto operator() (T const& t) const {
+        auto&& [f0, f1] = forwarder(t);
+        return std::make_tuple(f0, f1);
+    }
+};
+
+template <typename T>
+struct to_tuple_helper<T, 3> {
+    constexpr auto operator() (T const& t) const {
+        auto&& [f0, f1, f2] = forwarder(t);
+        return std::make_tuple(f0, f1, f2);
+    }
+};
+
+template <typename T>
+struct to_tuple_helper<T, 4> {
+    constexpr auto operator() (T const& t) const {
+        auto&& [f0, f1, f2, f3] = forwarder(t);
+        return std::make_tuple(f0, f1, f2, f3);
+    }
+};
+
+template <typename T>
+constexpr auto to_tuple(T const& t) {
+    const unsigned ssize = MemberCounter<T>();
+    return to_tuple_helper<T, ssize>{}(t);
+}
+}
+
+
+template <typename ...Ts, unsigned ...Idx>
+constexpr void print_tuple_helper(std::tuple<Ts...> const& t, std::integer_sequence<unsigned, Idx...> iseq) {
+    ((std::cout << std::get<Idx>(t).value << ", "),...);
+}
+
+template <typename ...Ts>
+constexpr void print_tuple(std::tuple<Ts...> const& t) {
+    print_tuple_helper(t, std::make_integer_sequence<unsigned, sizeof...(Ts)>{});
+}
 
 using namespace ros::literals;
 
 int main() {
+
+    // std::cout << structured::MemberCounter<my_reg>() << std::endl;
     
     my_reg r0;
 
@@ -322,6 +398,9 @@ int main() {
     // apply(r0([](auto v) {
     //     return v*2;
     // }));
+
+    auto t = structured::to_tuple(r0);
+    print_tuple(t);
 
     // single-field read syntax
     uint8_t v;
