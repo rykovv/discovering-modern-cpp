@@ -103,6 +103,14 @@ enum class AccessType {
     RW
 };
 
+namespace detail {
+// forward declaration of operations
+template <typename Reg, unsigned msb, unsigned lsb, AccessType AT, typename Reg::value_type val>
+struct field_assignment_safe;
+struct field_assignment_unsafe;
+struct field_read;
+}
+
 template <typename Reg, unsigned msb, unsigned lsb, AccessType AT>
 requires FieldSelectable<typename Reg::value_type, msb, lsb>
 struct field {
@@ -124,17 +132,21 @@ struct field {
         }
     }();
 
-    constexpr field()
-        : value{0}
+    constexpr field(value_type v)
+        : value{v}
     {}
+
+    constexpr field() : field(0) {};
 
     template <typename U, U val>
     requires (std::is_convertible_v<U, value_type>)
-    constexpr auto operator= (std::integral_constant<U, val>) -> field & {
+    constexpr auto operator= (std::integral_constant<U, val>) -> ros::detail::field_assignment_safe<Reg, msb, lsb, AT, val> {
         static_assert(access_type != AccessType::RO, "cannot write read-only field");
         static_assert(val <= (mask >> lsb), "assigned value greater than allowed");
         value = val;
-        return *this;
+        return ros::detail::field_assignment_safe<Reg, msb, lsb, AT, val>{};
+        
+        // return *this;
     }
 
     constexpr auto operator= (auto const& rhs) -> field & {
@@ -164,6 +176,22 @@ struct field {
 
     value_type value;
 };
+
+namespace detail {
+template <typename Reg, unsigned msb, unsigned lsb, AccessType AT, typename Reg::value_type val>
+struct field_assignment_safe {
+    using type = field<Reg, msb, lsb, AT>;
+    static constexpr typename Reg::value_type value = val;
+};
+
+struct field_assignment_unsafe {
+    
+};
+
+struct field_read {
+    
+};
+}
 
 template <typename T>
 constexpr bool is_field_v = false;
@@ -223,16 +251,27 @@ constexpr auto operator""_f () {
 template<typename ...Fields>
 void apply(Fields ...fields);
  
-template<typename Field, typename ...Fields>
-requires(is_field_v<Field> && (is_field_v<Fields> && ...)) &&
-        (std::is_same_v<typename Field::reg, typename Fields::reg> && ...)
-std::tuple<typename Field::value_type, typename Fields::value_type...> apply(Field field, Fields ...fields) {
+// template<typename Op, typename ...Ops>
+// requires(is_field_v<typename Op::type> && (is_field_v<typename Ops::type> && ...)) &&
+//         (std::is_same_v<typename Op::type::reg, typename Ops::type::reg> && ...)
+// std::tuple<typename Op::type::value_type, typename Ops::type::value_type...> apply(Op op, Ops ...ops) {
+//     typename Op::type::value_type write_mask = (Op::type::access_type == AccessType::RW? Op::type::mask : 0) | ((Ops::type::access_type == AccessType::RW? Ops::type::mask : 0) | ...);
+//     std::cout << std::hex << write_mask << std::endl;
+//     typename Op::type::value_type rmw_mask = [&]() {
+//         auto tup = reflect::to_tuple(Op::type::reg);
+//     }();
+//     return std::make_tuple(op.value, ops.value...);
+// }
+
+// template<typename Field, typename ...Fields>
+// requires(is_field_v<Field> && (is_field_v<Fields> && ...)) &&
+//         (std::is_same_v<typename Field::reg, typename Fields::reg> && ...)
+// std::tuple<typename Field::value_type, typename Fields::value_type...> apply(Field field, Fields ...fields) {
     // optimization cases
     // 1. No read needed
     //   (a) there's only one RW field (goto)
     //   (b) all of the RW fields are written
     // 2. No more than one write to the same field allowed
-    // 3. No more than one read to the same field/reg allowed
 
     // need to learn how to filter a parameter pack
     // filter based on a RW AccessType and examine size_of...
@@ -245,8 +284,8 @@ std::tuple<typename Field::value_type, typename Fields::value_type...> apply(Fie
     // finally enforcement rules
 
     // to be filtered out by read
-    return std::make_tuple(field.value, fields.value...);
-}
+//     return std::make_tuple(field.value, fields.value...);
+// }
 
 template<>
 void apply() {};
@@ -278,7 +317,7 @@ struct my_reg : ros::reg<uint32_t, 0x2000> {
 
 // how does this work???
 
-namespace structured {
+namespace reflect {
 struct UniversalType {
     template<typename T>
     operator T() {}
@@ -346,6 +385,26 @@ constexpr auto to_tuple(T const& t) {
 }
 }
 
+namespace ros {
+template<typename Op, typename ...Ops>
+requires(ros::is_field_v<typename Op::type> && (is_field_v<typename Ops::type> && ...)) &&
+        (std::is_same_v<typename Op::type::reg, typename Ops::type::reg> && ...)
+std::tuple<typename Op::type::value_type, typename Ops::type::value_type...> apply(Op op, Ops ...ops) {
+    typename Op::type::value_type write_mask = (Op::type::access_type == AccessType::RW? Op::type::mask : 0) | ((Ops::type::access_type == AccessType::RW? Ops::type::mask : 0) | ...);
+    std::cout << std::hex << write_mask << std::endl;
+    
+    constexpr typename Op::type::value_type v = []<typename ...Ts, unsigned ...Idx> (std::tuple<Ts...> const& t, std::integer_sequence<unsigned, Idx...>) {
+        return ((std::get<Idx>(t).at == AccessType::RW ? decltype(std::get<Idx>(t))::mask : 0),...);
+    };
+
+    constexpr typename Op::type::value_type rmw_mask = [&]<typename T = typename Op::type::reg> () {
+        auto tup = reflect::to_tuple(T{});
+        
+        return 0;
+    }();
+    return std::make_tuple(op.value, ops.value...);
+}
+}
 
 template <typename ...Ts, unsigned ...Idx>
 constexpr void print_tuple_helper(std::tuple<Ts...> const& t, std::integer_sequence<unsigned, Idx...> iseq) {
@@ -370,8 +429,8 @@ int main() {
           r0.field1 = 12_f);
 
     // multi-field read syntax
-    auto [f2, f3] = apply(r0.field2.read(),
-                          r0.field3.read());
+    // auto [f2, f3] = apply(r0.field2.read(),
+    //                       r0.field3.read());
 
     // multi-field write/read syntax
     // auto [f2, f3] = apply(r0.field0 = 0xf_f,
@@ -399,7 +458,7 @@ int main() {
     //     return v*2;
     // }));
 
-    auto t = structured::to_tuple(r0);
+    auto t = reflect::to_tuple(r0);
     print_tuple(t);
 
     // single-field read syntax
