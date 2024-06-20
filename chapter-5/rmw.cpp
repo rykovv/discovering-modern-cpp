@@ -392,6 +392,17 @@ constexpr typename Reg::value_type get_rmw_mask (Reg const& r) {
 }
 }
 
+template <typename...> struct type_filter;
+template <> struct type_filter<> { using type = std::tuple<>; };
+
+template <typename C, typename T, typename ...Ts>
+struct type_filter<C, T, Ts...> {
+    using type = std::conditional_t<
+        std::is_same<C, T>, 
+        typename cont<T, typename type_filter<Ts...>::type>::type, 
+        typename type_filter<C, Ts...>::type;
+};
+
 // namespace ros {
 template<typename Op, typename ...Ops>
 requires(ros::is_field_v<typename Op::type> && (is_field_v<typename Ops::type> && ...)) &&
