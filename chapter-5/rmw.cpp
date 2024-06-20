@@ -393,14 +393,16 @@ std::tuple<typename Op::type::value_type, typename Ops::type::value_type...> app
     typename Op::type::value_type write_mask = (Op::type::access_type == AccessType::RW? Op::type::mask : 0) | ((Ops::type::access_type == AccessType::RW? Ops::type::mask : 0) | ...);
     std::cout << std::hex << write_mask << std::endl;
     
-    constexpr auto helper = []<typename ...Ts, unsigned ...Idx> (std::tuple<Ts...> const& t, std::integer_sequence<unsigned, Idx...>) -> typename Op::type::value_type {
-        return ((decltype(std::get<Idx>(t))::at == AccessType::RW ? decltype(std::get<Idx>(t))::mask : 0) | ...);
+    constexpr auto get_mask_helper = []<typename ...Ts, unsigned ...Idx> (std::tuple<Ts...> const& t, std::integer_sequence<unsigned, Idx...>) -> typename Op::type::value_type {
+        return ((std::get<Idx>(t).access_type == AccessType::RW ? std::get<Idx>(t).mask : 0) | ...);
     };
-
     constexpr typename Op::type::value_type rmw_mask = [&]<typename T = typename Op::type::reg> () {
         auto tup = reflect::to_tuple(T{});
-        return helper(tup, std::make_integer_sequence<unsigned, reflect::MemberCounter<T>()>{});
+        return get_mask_helper(tup, std::make_integer_sequence<unsigned, reflect::MemberCounter<T>()>{});
     }();
+
+    std::cout << std::hex << rmw_mask << std::endl;
+
     return std::make_tuple(op.value, ops.value...);
 }
 }
