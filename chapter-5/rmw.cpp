@@ -104,9 +104,11 @@ enum class AccessType {
 
 namespace detail {
 // forward declaration of operations
-template <typename Reg, unsigned msb, unsigned lsb, AccessType AT, typename Reg::value_type val>
+// template <typename Reg, unsigned msb, unsigned lsb, AccessType AT, typename Reg::value_type val>
+template <typename Field, typename Field::value_type val>
 struct field_assignment_safe;
 struct field_assignment_unsafe;
+template <typename Field>
 struct field_read;
 }
 
@@ -139,13 +141,11 @@ struct field {
 
     template <typename U, U val>
     requires (std::is_convertible_v<U, value_type>)
-    constexpr auto operator= (std::integral_constant<U, val>) -> ros::detail::field_assignment_safe<Reg, msb, lsb, AT, val> {
+    constexpr auto operator= (std::integral_constant<U, val>) -> ros::detail::field_assignment_safe<field, val> {
         static_assert(access_type != AccessType::RO, "cannot write read-only field");
         static_assert(val <= (mask >> lsb), "assigned value greater than allowed");
         value = val;
-        return ros::detail::field_assignment_safe<Reg, msb, lsb, AT, val>{};
-        
-        // return *this;
+        return ros::detail::field_assignment_safe<field, val>{};
     }
 
     constexpr auto operator= (auto const& rhs) -> field & {
@@ -168,27 +168,30 @@ struct field {
         return (old_value & ~mask) | (new_value & mask);
     }
 
-    constexpr auto read() const {
+    constexpr auto read() const -> ros::detail::field_read<field> {
         // to be substituted with read template expr
-        return *this;
+        // return *this;
+        return ros::detail::field_read<field>{};
     }
 
     value_type value;
 };
 
 namespace detail {
-template <typename Reg, unsigned msb, unsigned lsb, AccessType AT, typename Reg::value_type val>
+// template <typename Reg, unsigned msb, unsigned lsb, AccessType AT, typename Reg::value_type val>
+template <typename Field, typename Field::value_type val>
 struct field_assignment_safe {
-    using type = field<Reg, msb, lsb, AT>;
-    static constexpr typename Reg::value_type value = val;
+    using type = Field;
+    static constexpr typename Field::value_type value = val;
 };
 
 struct field_assignment_unsafe {
     
 };
 
+template <typename Field>
 struct field_read {
-    
+    using type = Field;
 };
 }
 
@@ -397,12 +400,14 @@ std::tuple<typename Op::type::value_type, typename Ops::type::value_type...> app
     using value_type = typename Op::type::value_type;
     using Reg = typename Op::type::reg;
 
-    constexpr value_type write_mask = (Op::type::access_type == AccessType::RW? Op::type::mask : 0) | ((Ops::type::access_type == AccessType::RW? Ops::type::mask : 0) | ...);
-    std::cout << std::hex << write_mask << std::endl;
-    
+    constexpr value_type write_mask = (Op::type::access_type == AccessType::RW? Op::type::mask : 0) | ((Ops::type::access_type == AccessType::RW? Ops::type::mask : 0) | ...);    
     constexpr value_type rmw_mask = detail::get_rmw_mask(Reg{});
-
-    std::cout << std::hex << rmw_mask << std::endl;
+    // std::cout << std::hex << write_mask << std::endl;
+    // std::cout << std::hex << rmw_mask << std::endl;
+    constexpr bool is_partial_write = (rmw_mask & write_mask != rmw_mask);
+    std::cout << std::hex << is_partial_write << std::endl;
+    constexpr bool needs_read = std::conjunction_v<std::is_same<Op, ros::detail::field_read<typename Op::type>>, std::is_same<Ops, ros::detail::field_read<typename Ops::type>>...>;
+    std::cout << std::hex << needs_read << std::endl;
 
     return std::make_tuple(op.value, ops.value...);
 }
