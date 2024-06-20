@@ -20,7 +20,6 @@ concept FieldSelectable = requires {
 );
 
 namespace detail {
-
 template <char Char>
 struct is_decimal_digit {
     static constexpr bool value = Char - '0' >= 0 && Char - '0' <= 9;
@@ -305,14 +304,6 @@ constexpr T& operator<= (T & lhs, ros::field<Reg, msb, lsb, AT> const& rhs) {
     lhs = rhs.value;
     return lhs;
 }
-}
-
-struct my_reg : ros::reg<uint32_t, 0x2000> {
-    ros::field<my_reg, 4, 0, ros::AccessType::RW> field0;
-    ros::field<my_reg, 12, 8, ros::AccessType::RW> field1;
-    ros::field<my_reg, 20, 16, ros::AccessType::RW> field2;
-    ros::field<my_reg, 31, 28, ros::AccessType::RW> field3;
-};
 
 
 // how does this work???
@@ -385,21 +376,31 @@ constexpr auto to_tuple(T const& t) {
 }
 }
 
-namespace ros {
+namespace detail {
+template <typename T, typename ...Ts, unsigned ...Idx>
+constexpr auto get_rwm_mask_helper (std::tuple<T, Ts...> const& t, std::integer_sequence<unsigned, Idx...>) -> typename T::value_type {
+    return ((std::get<Idx>(t).access_type == ros::AccessType::RW ? std::get<Idx>(t).mask : 0) | ...);
+};
+
+template <typename Reg>
+constexpr typename Reg::value_type get_rmw_mask (Reg const& r) {
+    auto tup = reflect::to_tuple(r);
+    return get_rwm_mask_helper(tup, std::make_integer_sequence<unsigned, reflect::MemberCounter<Reg>()>{});
+}
+}
+
+// namespace ros {
 template<typename Op, typename ...Ops>
 requires(ros::is_field_v<typename Op::type> && (is_field_v<typename Ops::type> && ...)) &&
         (std::is_same_v<typename Op::type::reg, typename Ops::type::reg> && ...)
 std::tuple<typename Op::type::value_type, typename Ops::type::value_type...> apply(Op op, Ops ...ops) {
-    typename Op::type::value_type write_mask = (Op::type::access_type == AccessType::RW? Op::type::mask : 0) | ((Ops::type::access_type == AccessType::RW? Ops::type::mask : 0) | ...);
+    using value_type = typename Op::type::value_type;
+    using Reg = typename Op::type::reg;
+
+    constexpr value_type write_mask = (Op::type::access_type == AccessType::RW? Op::type::mask : 0) | ((Ops::type::access_type == AccessType::RW? Ops::type::mask : 0) | ...);
     std::cout << std::hex << write_mask << std::endl;
     
-    constexpr auto get_mask_helper = []<typename ...Ts, unsigned ...Idx> (std::tuple<Ts...> const& t, std::integer_sequence<unsigned, Idx...>) -> typename Op::type::value_type {
-        return ((std::get<Idx>(t).access_type == AccessType::RW ? std::get<Idx>(t).mask : 0) | ...);
-    };
-    constexpr typename Op::type::value_type rmw_mask = [&]<typename T = typename Op::type::reg> () {
-        auto tup = reflect::to_tuple(T{});
-        return get_mask_helper(tup, std::make_integer_sequence<unsigned, reflect::MemberCounter<T>()>{});
-    }();
+    constexpr value_type rmw_mask = detail::get_rmw_mask(Reg{});
 
     std::cout << std::hex << rmw_mask << std::endl;
 
@@ -418,6 +419,13 @@ constexpr void print_tuple(std::tuple<Ts...> const& t) {
 }
 
 using namespace ros::literals;
+
+struct my_reg : ros::reg<uint32_t, 0x2000> {
+    ros::field<my_reg, 4, 0, ros::AccessType::RW> field0;
+    ros::field<my_reg, 12, 8, ros::AccessType::RW> field1;
+    ros::field<my_reg, 20, 16, ros::AccessType::RW> field2;
+    ros::field<my_reg, 31, 28, ros::AccessType::RW> field3;
+};
 
 int main() {
 
@@ -459,7 +467,7 @@ int main() {
     //     return v*2;
     // }));
 
-    auto t = reflect::to_tuple(r0);
+    auto t = ros::reflect::to_tuple(r0);
     print_tuple(t);
 
     // single-field read syntax
