@@ -392,16 +392,39 @@ constexpr typename Reg::value_type get_rmw_mask (Reg const& r) {
 }
 }
 
-template <typename...> struct type_filter;
-template <> struct type_filter<> { using type = std::tuple<>; };
-
-template <typename C, typename T, typename ...Ts>
-struct type_filter<C, T, Ts...> {
-    using type = std::conditional_t<
-        std::is_same<C, T>, 
-        typename cont<T, typename type_filter<Ts...>::type>::type, 
-        typename type_filter<C, Ts...>::type;
+template <typename>
+struct is_field_read {
+    static constexpr bool value = false;
 };
+
+template <typename Field>
+struct is_field_read<ros::detail::field_read<Field>> {
+    static constexpr bool value = true;
+};
+
+template <typename Field>
+constexpr bool is_field_read_v = is_field_read<Field>::value;
+
+template <typename ...> struct typelist;
+
+template <typename, typename> struct typeconc;
+template <typename  T, typename ...Args>
+struct typeconc<T, typelist<Args...>>
+{
+    using type = typelist<T, Args...>;
+};
+
+template <typename...> struct type_filter;
+template <> struct type_filter<> { using type = typelist<>; };
+
+template <typename T, typename ...Ts>
+struct type_filter<T, Ts...> {
+    using type = typename std::conditional_t<
+        is_field_read_v<T>,
+        typename typeconc<T, typename type_filter<Ts...>::type>::type, 
+        typename type_filter<Ts...>::type>;
+};
+
 
 // namespace ros {
 template<typename Op, typename ...Ops>
@@ -419,6 +442,8 @@ std::tuple<typename Op::type::value_type, typename Ops::type::value_type...> app
     std::cout << std::hex << is_partial_write << std::endl;
     constexpr bool needs_read = std::conjunction_v<std::is_same<Op, ros::detail::field_read<typename Op::type>>, std::is_same<Ops, ros::detail::field_read<typename Ops::type>>...>;
     std::cout << std::hex << needs_read << std::endl;
+
+    using reads = type_filter<Op, Ops...>::type;
 
     return std::make_tuple(op.value, ops.value...);
 }
@@ -442,6 +467,7 @@ struct my_reg : ros::reg<uint32_t, 0x2000> {
     ros::field<my_reg, 20, 16, ros::AccessType::RW> field2;
     ros::field<my_reg, 31, 28, ros::AccessType::RW> field3;
 };
+
 
 int main() {
 
