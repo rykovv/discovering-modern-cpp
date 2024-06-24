@@ -108,6 +108,7 @@ namespace detail {
 // template <typename Reg, unsigned msb, unsigned lsb, AccessType AT, typename Reg::value_type val>
 template <typename Field, typename Field::value_type val>
 struct field_assignment_safe;
+template <typename Field>
 struct field_assignment_unsafe;
 template <typename Field>
 struct field_read;
@@ -186,8 +187,11 @@ struct field_assignment_safe {
     static constexpr typename Field::value_type value = val;
 };
 
+template <typename Field>
 struct field_assignment_unsafe {
-    
+    using type = Field;
+    // should it be static?
+    typename Field::value_type value;
 };
 
 template <typename Field>
@@ -477,6 +481,16 @@ struct is_field_assignment_safe<ros::detail::field_assignment_safe<Field, val>> 
     static constexpr bool value = true;
 };
 
+template <typename>
+struct is_field_assignment_unsafe {
+    static constexpr bool value = false;
+};
+
+template <typename Field>
+struct is_field_assignment_unsafe<ros::detail::field_assignment_unsafe<Field>> {
+    static constexpr bool value = true;
+};
+
 
 // namespace ros {
 template<typename Op, typename ...Ops>
@@ -486,6 +500,7 @@ std::tuple<typename Op::type::value_type, typename Ops::type::value_type...> app
     using value_type = typename Op::type::value_type;
     using Reg = typename Op::type::reg;
 
+    // [TODO]: need to check if op is a write
     constexpr value_type write_mask = (Op::type::access_type == AccessType::RW? Op::type::mask : 0) | ((Ops::type::access_type == AccessType::RW? Ops::type::mask : 0) | ...);    
     constexpr value_type rmw_mask = detail::get_rmw_mask(Reg{});
     // std::cout << std::hex << write_mask << std::endl;
@@ -509,7 +524,9 @@ std::tuple<typename Op::type::value_type, typename Ops::type::value_type...> app
     // operations
     // (1) perform read for partial write
     // filter out write ops
-    auto writes = filter::tuple_filter<is_field_assignment_safe>(std::make_tuple(op, ops...));
+    auto safe_writes = filter::tuple_filter<is_field_assignment_safe>(std::make_tuple(op, ops...));
+    auto unsafe_writes = filter::tuple_filter<is_field_assignment_unsafe>(std::make_tuple(op, ops...));
+    
     // combine writes into one value
 
     if constexpr (is_partial_write) {
