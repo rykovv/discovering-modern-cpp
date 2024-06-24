@@ -4,6 +4,7 @@
 #include <iostream>
 #include <type_traits>
 #include <tuple>
+#include <typeinfo>
 
 // Register Optimization with Safety (ROS)
 
@@ -392,6 +393,67 @@ constexpr typename Reg::value_type get_rmw_mask (Reg const& r) {
 }
 }
 
+namespace filter {
+template <typename ...Is>
+struct index_sequence_concat;
+
+template <std::size_t... Ls>
+struct index_sequence_concat<std::index_sequence<Ls...>> {
+    using type = std::index_sequence<Ls...>;
+};
+
+template <std::size_t... Ls, std::size_t... Rs>
+struct index_sequence_concat<std::index_sequence<Ls...>, std::index_sequence<Rs...>> {
+    using type = std::index_sequence<Ls..., Rs...>;
+};
+
+template <typename Is0, typename Is1, typename ...Is>
+struct index_sequence_concat<Is0, Is1, Is...> {
+    using type = typename index_sequence_concat<
+        typename index_sequence_concat<Is0, Is1>::type, Is...>
+        ::type;
+};
+
+template <bool B, std::size_t I>
+struct conditional_index_sequence {
+    using type = std::index_sequence<>;
+};
+
+template <std::size_t I>
+struct conditional_index_sequence<true, I> {
+    using type = std::index_sequence<I>;
+};
+
+template <bool B, std::size_t I>
+using conditional_index_sequence_t = typename conditional_index_sequence<B, I>::type;
+
+template <template <typename> class Predicate, typename Tuple, std::size_t... Is>
+constexpr auto filtered_index_sequence_helper(const Tuple& tuple, std::index_sequence<Is...>) {
+    using r = typename index_sequence_concat<
+        conditional_index_sequence_t<
+            Predicate<std::tuple_element_t<Is, Tuple>>::value,
+            Is
+        >...
+    >::type;
+    return r{};
+}
+
+template <template <typename> class Predicate, typename Tuple>
+constexpr auto filtered_index_sequence(const Tuple& tuple) {
+    return filtered_index_sequence_helper<Predicate>(tuple, std::make_index_sequence<std::tuple_size<Tuple>::value>{});
+}
+
+template <typename Tuple, std::size_t... Is>
+constexpr auto tuple_filter_helper(const Tuple& tuple, std::index_sequence<Is...>) {
+    return std::make_tuple(std::get<Is>(tuple)...);
+}
+
+template <template <typename> class Predicate, typename Tuple>
+auto tuple_filter(const Tuple& tuple) {
+    return tuple_filter_helper(tuple, filtered_index_sequence<Predicate>(tuple));
+}
+}
+
 template <typename>
 struct is_field_read {
     static constexpr bool value = false;
@@ -405,24 +467,14 @@ struct is_field_read<ros::detail::field_read<Field>> {
 template <typename Field>
 constexpr bool is_field_read_v = is_field_read<Field>::value;
 
-template <typename ...> struct typelist;
-
-template <typename, typename> struct typeconc;
-template <typename  T, typename ...Args>
-struct typeconc<T, typelist<Args...>>
-{
-    using type = typelist<T, Args...>;
+template <typename>
+struct is_field_assignment_safe {
+    static constexpr bool value = false;
 };
 
-template <typename...> struct type_filter;
-template <> struct type_filter<> { using type = typelist<>; };
-
-template <typename T, typename ...Ts>
-struct type_filter<T, Ts...> {
-    using type = typename std::conditional_t<
-        is_field_read_v<T>,
-        typename typeconc<T, typename type_filter<Ts...>::type>::type, 
-        typename type_filter<Ts...>::type>;
+template <typename Field, typename Field::value_type val>
+struct is_field_assignment_safe<ros::detail::field_assignment_safe<Field, val>> {
+    static constexpr bool value = true;
 };
 
 
@@ -439,11 +491,39 @@ std::tuple<typename Op::type::value_type, typename Ops::type::value_type...> app
     // std::cout << std::hex << write_mask << std::endl;
     // std::cout << std::hex << rmw_mask << std::endl;
     constexpr bool is_partial_write = (rmw_mask & write_mask != rmw_mask);
-    std::cout << std::hex << is_partial_write << std::endl;
-    constexpr bool needs_read = std::conjunction_v<std::is_same<Op, ros::detail::field_read<typename Op::type>>, std::is_same<Ops, ros::detail::field_read<typename Ops::type>>...>;
-    std::cout << std::hex << needs_read << std::endl;
+    // std::cout << std::hex << is_partial_write << std::endl;
+    constexpr bool return_reads = std::conjunction_v<std::is_same<Op, ros::detail::field_read<typename Op::type>>, std::is_same<Ops, ros::detail::field_read<typename Ops::type>>...>;
+    // std::cout << std::hex << needs_read << std::endl;
 
-    using reads = type_filter<Op, Ops...>::type;
+    // cases:
+    // i)   writes only -- return empty tuple
+    // ii)  reads only  -- return tuple with corresponding values
+    // iii) writes and reads combined -- return tuple with corresponding values
+
+    // basic flows:
+    // has writes?
+    //   partial write? (needs read)
+    // has reads?
+    //   combined writes and reads
+
+    // operations
+    // (1) perform read for partial write
+    // filter out write ops
+    auto writes = filter::tuple_filter<is_field_assignment_safe>(std::make_tuple(op, ops...));
+    // combine writes into one value
+
+    if constexpr (is_partial_write) {
+        // read
+
+    }
+
+    // (2) perform write
+
+    // (3) prepare read returns
+    if constexpr (return_reads) {
+        // get read ops
+        auto reads = filter::tuple_filter<is_field_read>(std::make_tuple(op, ops...));
+    }
 
     return std::make_tuple(op.value, ops.value...);
 }
