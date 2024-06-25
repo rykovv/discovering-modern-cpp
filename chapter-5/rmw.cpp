@@ -493,6 +493,12 @@ struct is_field_assignment_unsafe<ros::detail::field_assignment_unsafe<Field>> {
     static constexpr bool value = true;
 };
 
+namespace user {
+template <typename T, typename Addr>
+T read(Addr address);
+template <typename T, typename Addr>
+void write(T val, Addr address);
+}
 
 // namespace ros {
 template<typename Op, typename ...Ops>
@@ -603,6 +609,17 @@ constexpr void print_tuple_helper(std::tuple<Ts...> const& t, std::integer_seque
 template <typename ...Ts>
 constexpr void print_tuple(std::tuple<Ts...> const& t) {
     print_tuple_helper(t, std::make_integer_sequence<unsigned, sizeof...(Ts)>{});
+}
+
+// actual declarations of read/write functions in user space
+template <typename T, typename Addr>
+T ros::user::read(Addr address) {
+    std::cout << "read called on addr " << address << std::endl;
+    return T{0xfafafafa};
+}
+template <typename T, typename Addr>
+void ros::user::write(T val, Addr address) {
+    std::cout << "write called with " << val << " on addr " << address << std::endl;
 }
 
 using namespace ros::literals;
