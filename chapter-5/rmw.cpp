@@ -106,6 +106,7 @@ enum class AccessType {
 namespace detail {
 // forward declaration of operations
 // template <typename Reg, unsigned msb, unsigned lsb, AccessType AT, typename Reg::value_type val>
+struct field_assignment;
 template <typename Field, typename Field::value_type val>
 struct field_assignment_safe;
 template <typename Field>
@@ -181,14 +182,15 @@ struct field {
 
 namespace detail {
 // template <typename Reg, unsigned msb, unsigned lsb, AccessType AT, typename Reg::value_type val>
+struct field_assignment {};
 template <typename Field, typename Field::value_type val>
-struct field_assignment_safe {
+struct field_assignment_safe : field_assignment {
     using type = Field;
     static constexpr typename Field::value_type value = val;
 };
 
 template <typename Field>
-struct field_assignment_unsafe {
+struct field_assignment_unsafe : field_assignment {
     using type = Field;
     // should it be static?
     typename Field::value_type value;
@@ -500,12 +502,50 @@ std::tuple<typename Op::type::value_type, typename Ops::type::value_type...> app
     using value_type = typename Op::type::value_type;
     using Reg = typename Op::type::reg;
 
-    // [TODO]: need to check if op is a write
-    constexpr value_type write_mask = (Op::type::access_type == AccessType::RW? Op::type::mask : 0) | ((Ops::type::access_type == AccessType::RW? Ops::type::mask : 0) | ...);    
-    constexpr value_type rmw_mask = detail::get_rmw_mask(Reg{});
+    auto safe_writes = filter::tuple_filter<is_field_assignment_safe>(std::make_tuple(op, ops...));
+    auto unsafe_writes = filter::tuple_filter<is_field_assignment_unsafe>(std::make_tuple(op, ops...));
+    // can be done in one shot with a type_trait
+    auto writes = std::tuple_cat(safe_writes, unsafe_writes);
+
+    constexpr value_type write_mask = []<typename ...Ts>(std::tuple<Ts...> const& writes) {
+        value_type mask{0};
+        if constexpr (sizeof ...(Ts) > 0) {
+            std::apply([&mask](auto ...ops) {
+                    mask = (decltype(ops)::type::mask | ...);
+                }, writes);
+        }
+        return mask;
+    }(writes);
+
+    if constexpr (write_mask != 0) {
+        // there will be a write
+        // is it a partial write
+        constexpr value_type rmw_mask = detail::get_rmw_mask(Reg{});
+        constexpr bool is_partial_write = (rmw_mask & write_mask != rmw_mask);
+
+        if constexpr (is_partial_write) {
+            // can read here
+        }
+
+        // can perform writes here
+    } 
+
+    // constexpr value_type write_mask = [](auto const& writes) {
+        // value_type wm{0};
+        // if constexpr (std::tuple_size_v<decltype(writes)> > 0) {
+        //     std::apply([&wm](auto ...ops) {
+        //             wm = (decltype(ops)::type::mask | ...);
+        //         }, writes);
+        // }
+
+        // return 0;
+        // return std::is_base_of_v<ros::detail::field_assignment, Ts> | ... | 0; 
+        // return std::is_base_of<ros::detail::field_assignment, Ts>::value ? Ts::type::mask : value_type{0}...; 
+    // }(writes);// std::is_base_of_v<ros::detail::field_assignment, Op> ? 1 : 0;//(Op::type::access_type == AccessType::RW? Op::type::mask : 0) | ((Ops::type::access_type == AccessType::RW? Ops::type::mask : 0) | ...);    
+    // constexpr value_type rmw_mask = detail::get_rmw_mask(Reg{});
     // std::cout << std::hex << write_mask << std::endl;
     // std::cout << std::hex << rmw_mask << std::endl;
-    constexpr bool is_partial_write = (rmw_mask & write_mask != rmw_mask);
+    // constexpr bool is_partial_write = (rmw_mask & write_mask != rmw_mask);
     // std::cout << std::hex << is_partial_write << std::endl;
     constexpr bool return_reads = std::conjunction_v<std::is_same<Op, ros::detail::field_read<typename Op::type>>, std::is_same<Ops, ros::detail::field_read<typename Ops::type>>...>;
     // std::cout << std::hex << needs_read << std::endl;
@@ -524,15 +564,24 @@ std::tuple<typename Op::type::value_type, typename Ops::type::value_type...> app
     // operations
     // (1) perform read for partial write
     // filter out write ops
-    auto safe_writes = filter::tuple_filter<is_field_assignment_safe>(std::make_tuple(op, ops...));
-    auto unsafe_writes = filter::tuple_filter<is_field_assignment_unsafe>(std::make_tuple(op, ops...));
+    // auto safe_writes = filter::tuple_filter<is_field_assignment_safe>(std::make_tuple(op, ops...));
+    // auto unsafe_writes = filter::tuple_filter<is_field_assignment_unsafe>(std::make_tuple(op, ops...));
+    // // can be done in one shot with a type_trait
+    // auto writes = std::tuple_cat(safe_writes, unsafe_writes);
+    // value_type wr{0};
+    // if constexpr (std::tuple_size_v<decltype(writes)> > 0) {
+    //     std::apply([&wr](auto ...ops) {
+    //             wr = (decltype(ops)::type::mask | ...);
+    //         }, writes);
+    // }
     
+    value_type value = 0;
     // combine writes into one value
 
-    if constexpr (is_partial_write) {
-        // read
+    // if constexpr (is_partial_write) {
+    //     // read
 
-    }
+    // }
 
     // (2) perform write
 
