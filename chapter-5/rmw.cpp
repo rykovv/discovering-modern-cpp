@@ -156,7 +156,7 @@ struct field {
         using rhs_type = std::remove_reference_t<decltype(rhs)>;
         static_assert(rhs_type::length <= msb - lsb, "larger field cannot be safely assigned to a narrower one");
         value = rhs.value;
-        return *this;
+        return ros::detail::field_assignment_safe<field, value>{};
     }
 
     constexpr auto operator= (auto && rhs) -> field & {
@@ -164,7 +164,7 @@ struct field {
         using rhs_type = std::remove_reference_t<decltype(rhs)>;
         static_assert(rhs_type::length <= msb - lsb, "larger field cannot be safely assigned to a narrower one");
         value = rhs.value;
-        return *this;
+        return ros::detail::field_assignment_safe<field, value>{};
     }
 
     static constexpr value_type update (value_type old_value, value_type new_value) {
@@ -508,6 +508,8 @@ std::tuple<typename Op::type::value_type, typename Ops::type::value_type...> app
     using value_type = typename Op::type::value_type;
     using Reg = typename Op::type::reg;
 
+    value_type value{};
+
     auto safe_writes = filter::tuple_filter<is_field_assignment_safe>(std::make_tuple(op, ops...));
     auto unsafe_writes = filter::tuple_filter<is_field_assignment_unsafe>(std::make_tuple(op, ops...));
     // can be done in one shot with a type_trait
@@ -531,9 +533,14 @@ std::tuple<typename Op::type::value_type, typename Ops::type::value_type...> app
 
         if constexpr (is_partial_write) {
             // can read here
+            value = user::read<value_type>(Reg::address);
         }
 
         // can perform writes here
+        std::apply([&](auto ...writes) {
+                value = (decltype(writes)::type::update(value, writes.value),...);
+            }, writes);
+        std::cout << std::hex << value << std::endl;
     } 
 
     // constexpr value_type write_mask = [](auto const& writes) {
@@ -581,7 +588,7 @@ std::tuple<typename Op::type::value_type, typename Ops::type::value_type...> app
     //         }, writes);
     // }
     
-    value_type value = 0;
+    // value_type value = 0;
     // combine writes into one value
 
     // if constexpr (is_partial_write) {
@@ -615,7 +622,7 @@ constexpr void print_tuple(std::tuple<Ts...> const& t) {
 template <typename T, typename Addr>
 T ros::user::read(Addr address) {
     std::cout << "read called on addr " << address << std::endl;
-    return T{0xfafafafa};
+    return T{0x0};
 }
 template <typename T, typename Addr>
 void ros::user::write(T val, Addr address) {
