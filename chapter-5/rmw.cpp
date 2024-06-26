@@ -151,7 +151,7 @@ struct field {
         return ros::detail::field_assignment_safe<field, val>{};
     }
 
-    constexpr auto operator= (auto const& rhs) -> field & {
+    constexpr auto operator= (auto const& rhs) -> ros::detail::field_assignment_safe<field, decltype(rhs)::value> {
         static_assert(access_type != AccessType::RO, "cannot write read-only field");
         using rhs_type = std::remove_reference_t<decltype(rhs)>;
         static_assert(rhs_type::length <= msb - lsb, "larger field cannot be safely assigned to a narrower one");
@@ -159,7 +159,7 @@ struct field {
         return ros::detail::field_assignment_safe<field, value>{};
     }
 
-    constexpr auto operator= (auto && rhs) -> field & {
+    constexpr auto operator= (auto && rhs) -> ros::detail::field_assignment_safe<field, decltype(rhs)::value> {
         static_assert(access_type != AccessType::RO, "cannot write read-only field");
         using rhs_type = std::remove_reference_t<decltype(rhs)>;
         static_assert(rhs_type::length <= msb - lsb, "larger field cannot be safely assigned to a narrower one");
