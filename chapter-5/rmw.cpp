@@ -543,6 +543,8 @@ constexpr T& operator<= (T & lhs, ros::field<Reg, msb, lsb, AT> const& rhs) {
 }
 }
 
+
+// debug tuple print
 template <typename ...Ts, unsigned ...Idx>
 constexpr void print_tuple_helper(std::tuple<Ts...> const& t, std::integer_sequence<unsigned, Idx...> iseq) {
     ((std::cout << std::get<Idx>(t).value << ", "),...);
@@ -552,6 +554,7 @@ template <typename ...Ts>
 constexpr void print_tuple(std::tuple<Ts...> const& t) {
     print_tuple_helper(t, std::make_integer_sequence<unsigned, sizeof...(Ts)>{});
 }
+
 
 // actual declarations of read/write functions in user space
 template <typename T, typename Addr>
@@ -576,8 +579,6 @@ struct my_reg : ros::reg<uint32_t, 0x2000> {
 
 int main() {
 
-    // std::cout << structured::MemberCounter<my_reg>() << std::endl;
-    
     my_reg r0;
 
     // multi-field write syntax
