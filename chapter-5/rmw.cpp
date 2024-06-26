@@ -171,9 +171,16 @@ struct field {
         return (old_value & ~mask) | (new_value & mask);
     }
 
+    static constexpr value_type to_reg (value_type value) {
+        return (value << lsb) & mask;
+    }
+
+    static constexpr value_type to_field (value_type value) {
+        return (value & mask) >> lsb;
+    }
+
     constexpr auto read() const -> ros::detail::field_read<field> {
         // to be substituted with read template expr
-        // return *this;
         return ros::detail::field_read<field>{};
     }
 
@@ -256,65 +263,6 @@ constexpr auto operator""_f () {
     return std::integral_constant<T, new_value>{};
 }
 }
-
-template<typename ...Fields>
-void apply(Fields ...fields);
- 
-// template<typename Op, typename ...Ops>
-// requires(is_field_v<typename Op::type> && (is_field_v<typename Ops::type> && ...)) &&
-//         (std::is_same_v<typename Op::type::reg, typename Ops::type::reg> && ...)
-// std::tuple<typename Op::type::value_type, typename Ops::type::value_type...> apply(Op op, Ops ...ops) {
-//     typename Op::type::value_type write_mask = (Op::type::access_type == AccessType::RW? Op::type::mask : 0) | ((Ops::type::access_type == AccessType::RW? Ops::type::mask : 0) | ...);
-//     std::cout << std::hex << write_mask << std::endl;
-//     typename Op::type::value_type rmw_mask = [&]() {
-//         auto tup = reflect::to_tuple(Op::type::reg);
-//     }();
-//     return std::make_tuple(op.value, ops.value...);
-// }
-
-// template<typename Field, typename ...Fields>
-// requires(is_field_v<Field> && (is_field_v<Fields> && ...)) &&
-//         (std::is_same_v<typename Field::reg, typename Fields::reg> && ...)
-// std::tuple<typename Field::value_type, typename Fields::value_type...> apply(Field field, Fields ...fields) {
-    // optimization cases
-    // 1. No read needed
-    //   (a) there's only one RW field (goto)
-    //   (b) all of the RW fields are written
-    // 2. No more than one write to the same field allowed
-
-    // need to learn how to filter a parameter pack
-    // filter based on a RW AccessType and examine size_of...
-
-    // check all RW fields of the register are written
-    // and partial masks of the fields and compare with the reg layout?
-    //   maybe will need to exlude RO fields from the layout
-    // need to learn how to iterate over a struct to create a layout first
-
-    // finally enforcement rules
-
-    // to be filtered out by read
-//     return std::make_tuple(field.value, fields.value...);
-// }
-
-template<>
-void apply() {};
-
-template <typename T, typename Reg, unsigned msb, unsigned lsb, ros::AccessType AT>
-concept SafeAssignable = requires {
-    requires std::unsigned_integral<T>;
-} && ( 
-    std::is_convertible_v<typename Reg::value_type, T> &&
-    std::numeric_limits<T>::digits >= msb - lsb
-);
-
-template <typename T, typename Reg, unsigned msb, unsigned lsb, ros::AccessType AT>
-requires SafeAssignable<T, Reg, msb, lsb, AT>
-constexpr T& operator<= (T & lhs, ros::field<Reg, msb, lsb, AT> const& rhs) {
-    // can call apply from here
-    lhs = rhs.value;
-    return lhs;
-}
-
 
 // how does this work???
 
@@ -493,6 +441,20 @@ struct is_field_assignment_unsafe<ros::detail::field_assignment_unsafe<Field>> {
     static constexpr bool value = true;
 };
 
+template <typename T>
+struct return_reads {
+    using type = void;
+};
+
+template <typename ...FieldReads>
+struct return_reads<std::tuple<FieldReads...>> {
+    using type = std::tuple<typename FieldReads::type::value_type...>;
+};
+
+template <typename ...Ts>
+using return_reads_t = typename return_reads<Ts...>::type;
+
+
 namespace user {
 template <typename T, typename Addr>
 T read(Addr address);
@@ -501,23 +463,32 @@ void write(T val, Addr address);
 }
 
 // namespace ros {
+
+template<typename ...Fields>
+void apply(Fields ...fields);
+
+template<>
+void apply() {};
+
 template<typename Op, typename ...Ops>
 requires(ros::is_field_v<typename Op::type> && (is_field_v<typename Ops::type> && ...)) &&
         (std::is_same_v<typename Op::type::reg, typename Ops::type::reg> && ...)
-std::tuple<typename Op::type::value_type, typename Ops::type::value_type...> apply(Op op, Ops ...ops) {
+auto apply(Op op, Ops ...ops) -> return_reads_t<decltype(filter::tuple_filter<is_field_read>(std::make_tuple(op, ops...)))> {
     using value_type = typename Op::type::value_type;
     using Reg = typename Op::type::reg;
 
     value_type value{};
+
+    constexpr bool return_reads = std::disjunction_v<std::is_same<Op, ros::detail::field_read<typename Op::type>>, std::is_same<Ops, ros::detail::field_read<typename Ops::type>>...>;
 
     auto safe_writes = filter::tuple_filter<is_field_assignment_safe>(std::make_tuple(op, ops...));
     auto unsafe_writes = filter::tuple_filter<is_field_assignment_unsafe>(std::make_tuple(op, ops...));
     // can be done in one shot with a type_trait
     auto writes = std::tuple_cat(safe_writes, unsafe_writes);
 
-    constexpr value_type write_mask = []<typename ...Ts>(std::tuple<Ts...> const& writes) {
+    constexpr value_type write_mask = []<typename ...Ws>(std::tuple<Ws...> const& writes) {
         value_type mask{0};
-        if constexpr (sizeof ...(Ts) > 0) {
+        if constexpr (sizeof ...(Ws) > 0) {
             std::apply([&mask](auto ...ops) {
                     mask = (decltype(ops)::type::mask | ...);
                 }, writes);
@@ -537,74 +508,38 @@ std::tuple<typename Op::type::value_type, typename Ops::type::value_type...> app
         }
 
         // can perform writes here
-        std::apply([&](auto ...writes) {
-                value = (decltype(writes)::type::update(value, writes.value),...);
+        value = std::apply(
+            [](auto ...writes) {
+                return (decltype(writes)::type::to_reg(writes.value) | ...);
             }, writes);
-        std::cout << std::hex << value << std::endl;
-    } 
 
-    // constexpr value_type write_mask = [](auto const& writes) {
-        // value_type wm{0};
-        // if constexpr (std::tuple_size_v<decltype(writes)> > 0) {
-        //     std::apply([&wm](auto ...ops) {
-        //             wm = (decltype(ops)::type::mask | ...);
-        //         }, writes);
-        // }
-
-        // return 0;
-        // return std::is_base_of_v<ros::detail::field_assignment, Ts> | ... | 0; 
-        // return std::is_base_of<ros::detail::field_assignment, Ts>::value ? Ts::type::mask : value_type{0}...; 
-    // }(writes);// std::is_base_of_v<ros::detail::field_assignment, Op> ? 1 : 0;//(Op::type::access_type == AccessType::RW? Op::type::mask : 0) | ((Ops::type::access_type == AccessType::RW? Ops::type::mask : 0) | ...);    
-    // constexpr value_type rmw_mask = detail::get_rmw_mask(Reg{});
-    // std::cout << std::hex << write_mask << std::endl;
-    // std::cout << std::hex << rmw_mask << std::endl;
-    // constexpr bool is_partial_write = (rmw_mask & write_mask != rmw_mask);
-    // std::cout << std::hex << is_partial_write << std::endl;
-    constexpr bool return_reads = std::conjunction_v<std::is_same<Op, ros::detail::field_read<typename Op::type>>, std::is_same<Ops, ros::detail::field_read<typename Ops::type>>...>;
-    // std::cout << std::hex << needs_read << std::endl;
-
-    // cases:
-    // i)   writes only -- return empty tuple
-    // ii)  reads only  -- return tuple with corresponding values
-    // iii) writes and reads combined -- return tuple with corresponding values
-
-    // basic flows:
-    // has writes?
-    //   partial write? (needs read)
-    // has reads?
-    //   combined writes and reads
-
-    // operations
-    // (1) perform read for partial write
-    // filter out write ops
-    // auto safe_writes = filter::tuple_filter<is_field_assignment_safe>(std::make_tuple(op, ops...));
-    // auto unsafe_writes = filter::tuple_filter<is_field_assignment_unsafe>(std::make_tuple(op, ops...));
-    // // can be done in one shot with a type_trait
-    // auto writes = std::tuple_cat(safe_writes, unsafe_writes);
-    // value_type wr{0};
-    // if constexpr (std::tuple_size_v<decltype(writes)> > 0) {
-    //     std::apply([&wr](auto ...ops) {
-    //             wr = (decltype(ops)::type::mask | ...);
-    //         }, writes);
-    // }
-    
-    // value_type value = 0;
-    // combine writes into one value
-
-    // if constexpr (is_partial_write) {
-    //     // read
-
-    // }
-
-    // (2) perform write
-
-    // (3) prepare read returns
-    if constexpr (return_reads) {
-        // get read ops
-        auto reads = filter::tuple_filter<is_field_read>(std::make_tuple(op, ops...));
+        ros::user::write(value, Reg::address);
+    } else /* if (return_reads) */ {
+        // implicit because if there're no writes, the only possible op is read
+        value = user::read<value_type>(Reg::address);
     }
 
-    return std::make_tuple(op.value, ops.value...);
+    auto get_reads = [&value]<typename ...Ts>(std::tuple<Ts...> reads) /* -> ... */ {
+        return std::make_tuple(Ts::type::to_field(value)...);
+    };
+
+    return get_reads(filter::tuple_filter<is_field_read>(std::make_tuple(op, ops...)));
+}
+
+template <typename T, typename Reg, unsigned msb, unsigned lsb, ros::AccessType AT>
+concept SafeAssignable = requires {
+    requires std::unsigned_integral<T>;
+} && ( 
+    std::is_convertible_v<typename Reg::value_type, T> &&
+    std::numeric_limits<T>::digits >= msb - lsb
+);
+
+template <typename T, typename Reg, unsigned msb, unsigned lsb, ros::AccessType AT>
+requires SafeAssignable<T, Reg, msb, lsb, AT>
+constexpr T& operator<= (T & lhs, ros::field<Reg, msb, lsb, AT> const& rhs) {
+    // [FIXME]
+    // lhs = apply(ros::detail::field_read<decltype(rhs)>{});
+    return lhs;
 }
 }
 
@@ -621,12 +556,12 @@ constexpr void print_tuple(std::tuple<Ts...> const& t) {
 // actual declarations of read/write functions in user space
 template <typename T, typename Addr>
 T ros::user::read(Addr address) {
-    std::cout << "read called on addr " << address << std::endl;
+    std::cout << "read called on addr " << std::hex << address << std::endl;
     return T{0x0};
 }
 template <typename T, typename Addr>
 void ros::user::write(T val, Addr address) {
-    std::cout << "write called with " << val << " on addr " << address << std::endl;
+    std::cout << "write called with " << std::hex << val << " on addr " << address << std::endl;
 }
 
 using namespace ros::literals;
@@ -635,7 +570,7 @@ struct my_reg : ros::reg<uint32_t, 0x2000> {
     ros::field<my_reg, 4, 0, ros::AccessType::RW> field0;
     ros::field<my_reg, 12, 8, ros::AccessType::RW> field1;
     ros::field<my_reg, 20, 16, ros::AccessType::RW> field2;
-    ros::field<my_reg, 31, 28, ros::AccessType::RW> field3;
+    ros::field<my_reg, 31, 28, ros::AccessType::RO> field3;
 };
 
 
@@ -646,18 +581,26 @@ int main() {
     my_reg r0;
 
     // multi-field write syntax
-    apply(r0.field0 = 0xf_f,
-          r0.field1 = 12_f);
+    // apply(r0.field0 = 0xf_f,
+    //       r0.field1 = 12_f);
 
     // multi-field read syntax
     // auto [f2, f3] = apply(r0.field2.read(),
     //                       r0.field3.read());
 
     // multi-field write/read syntax
-    // auto [f2, f3] = apply(r0.field0 = 0xf_f,
-    //                       r0.field1 = 12_f,
-    //                       r0.field2.read(),
-    //                       r0.field3.read());
+    auto [f0, f1] = apply(r0.field0 = 0xf_f,
+                          r0.field1 = 12_f,
+                          r0.field2 = 2_f,
+                          r0.field0.read(),
+                          r0.field1.read());
+
+    std::cout << std::hex << f0 << std::endl;
+    std::cout << std::hex << f1 << std::endl;
+
+    // unsafe writes
+    // apply(r0.field0.unsafe = 23,
+    //       r0.field1.unsafe = foo);
 
     // read
     // uint16_t value;
@@ -684,7 +627,7 @@ int main() {
 
     // single-field read syntax
     uint8_t v;
-    // v <= r0.field0;
+    v <= r0.field3;
     
     // return v;
     return v;
