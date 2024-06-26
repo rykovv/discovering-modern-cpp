@@ -471,8 +471,15 @@ template<>
 void apply() {};
 
 template<typename Op, typename ...Ops>
-requires(ros::is_field_v<typename Op::type> && (is_field_v<typename Ops::type> && ...)) &&
-        (std::is_same_v<typename Op::type::reg, typename Ops::type::reg> && ...)
+concept Applicable = (
+    // [TODO] refine to be a generic operation instead of field
+    ros::is_field_v<typename Op::type> && (is_field_v<typename Ops::type> && ...)
+) && (
+    std::is_same_v<typename Op::type::reg, typename Ops::type::reg> && ...
+);
+
+template<typename Op, typename ...Ops>
+requires Applicable<Op, Ops...>
 auto apply(Op op, Ops ...ops) -> return_reads_t<decltype(filter::tuple_filter<is_field_read>(std::make_tuple(op, ops...)))> {
     using value_type = typename Op::type::value_type;
     using Reg = typename Op::type::reg;
@@ -497,17 +504,13 @@ auto apply(Op op, Ops ...ops) -> return_reads_t<decltype(filter::tuple_filter<is
     }(writes);
 
     if constexpr (write_mask != 0) {
-        // there will be a write
-        // is it a partial write
         constexpr value_type rmw_mask = detail::get_rmw_mask(Reg{});
         constexpr bool is_partial_write = (rmw_mask & write_mask != rmw_mask);
 
         if constexpr (is_partial_write) {
-            // can read here
             value = user::read<value_type>(Reg::address);
         }
 
-        // can perform writes here
         value = std::apply(
             [](auto ...writes) {
                 return (decltype(writes)::type::to_reg(writes.value) | ...);
