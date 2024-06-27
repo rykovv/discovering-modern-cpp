@@ -248,7 +248,7 @@ template <typename T, typename b, std::size_t addr>
 struct reg {
     using value_type = T;
     using bus = b;
-    static constexpr std::size_t address = addr;
+    using address = std::integral_constant<std::size_t, addr>;
 
     // using f = typename DerivedReg::Fields;
     // using value_type = typename DerivedReg::Fields::value_type;
@@ -286,7 +286,7 @@ struct UniversalType {
 template<typename T>
 consteval auto MemberCounter(auto ...Members) {
     if constexpr (requires { T{ Members... }; } == false)
-        return sizeof...(Members) - 1 - 1; // ros::reg has address member
+        return sizeof...(Members) - 2;
     else
         return MemberCounter<T>(Members..., UniversalType{});
 }
@@ -515,7 +515,7 @@ auto apply(Op op, Ops ...ops) -> return_reads_t<decltype(filter::tuple_filter<is
         constexpr bool is_partial_write = (rmw_mask & write_mask != rmw_mask);
 
         if constexpr (is_partial_write) {
-            value = bus::template read<value_type>(Reg::address);
+            value = bus::template read<value_type>(Reg::address::value);
         }
 
         value = std::apply(
@@ -523,10 +523,10 @@ auto apply(Op op, Ops ...ops) -> return_reads_t<decltype(filter::tuple_filter<is
                 return (decltype(writes)::type::to_reg(value, writes.value) | ...);
             }, writes);
 
-        bus::write(value, Reg::address);
+        bus::write(value, Reg::address::value);
     } else /* if (return_reads) */ {
         // implicit because if there're no writes, the only possible op is read
-        value = bus::template read<value_type>(Reg::address);
+        value = bus::template read<value_type>(Reg::address::value);
     }
 
     auto get_reads = [&value]<typename ...Ts>(std::tuple<Ts...> reads) /* -> ... */ {
