@@ -368,6 +368,9 @@ struct index_sequence_concat<Is0, Is1, Is...> {
         ::type;
 };
 
+template <typename ...Is>
+using index_sequence_concat_t = typename index_sequence_concat<Is...>::type;
+
 template <bool B, std::size_t I>
 struct conditional_index_sequence {
     using type = std::index_sequence<>;
@@ -383,13 +386,12 @@ using conditional_index_sequence_t = typename conditional_index_sequence<B, I>::
 
 template <template <typename> class Predicate, typename Tuple, std::size_t... Is>
 constexpr auto filtered_index_sequence_helper(const Tuple& tuple, std::index_sequence<Is...>) {
-    using r = typename index_sequence_concat<
+    return index_sequence_concat_t<
         conditional_index_sequence_t<
             Predicate<std::tuple_element_t<Is, Tuple>>::value,
             Is
         >...
-    >::type;
-    return r{};
+    >{};
 }
 
 template <template <typename> class Predicate, typename Tuple>
@@ -511,6 +513,7 @@ auto apply(Op op, Ops ...ops) -> return_reads_t<decltype(filter::tuple_filter<is
             value = user::read<value_type>(Reg::address);
         }
 
+        // [TODO] take into account read value
         value = std::apply(
             [](auto ...writes) {
                 return (decltype(writes)::type::to_reg(writes.value) | ...);
