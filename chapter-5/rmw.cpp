@@ -543,11 +543,12 @@ concept SafeAssignable = requires {
 template <typename T, typename Reg, unsigned msb, unsigned lsb, ros::AccessType AT>
 requires SafeAssignable<T, Reg, msb, lsb, AT>
 constexpr T& operator<= (T & lhs, ros::field<Reg, msb, lsb, AT> const& rhs) {
-    // [FIXME]
-    // lhs = apply(ros::detail::field_read<decltype(rhs)>{});
+    auto [val] = apply(ros::detail::field_read<ros::field<Reg, msb, lsb, AT>>{});
+    lhs = val;
     return lhs;
 }
 }
+
 
 
 // debug tuple print
