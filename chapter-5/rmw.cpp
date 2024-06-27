@@ -171,8 +171,10 @@ struct field {
         return (old_value & ~mask) | (new_value & mask);
     }
 
-    static constexpr value_type to_reg (value_type value) {
-        return (value << lsb) & mask;
+    static constexpr value_type to_reg (value_type reg_value, value_type value) {
+        // [TODO] check correctness
+        // static_assert(value <= (mask >> lsb), "larger field cannot be safely assigned to a narrower one");
+        return (reg_value & ~mask) | (value << lsb) & mask;
     }
 
     static constexpr value_type to_field (value_type value) {
@@ -513,10 +515,9 @@ auto apply(Op op, Ops ...ops) -> return_reads_t<decltype(filter::tuple_filter<is
             value = user::read<value_type>(Reg::address);
         }
 
-        // [TODO] take into account read value
         value = std::apply(
-            [](auto ...writes) {
-                return (decltype(writes)::type::to_reg(writes.value) | ...);
+            [&value](auto ...writes) {
+                return (decltype(writes)::type::to_reg(value, writes.value) | ...);
             }, writes);
 
         ros::user::write(value, Reg::address);
