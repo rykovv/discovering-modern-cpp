@@ -120,6 +120,7 @@ requires FieldSelectable<typename Reg::value_type, msb, lsb>
 struct field {
     using value_type = typename Reg::value_type;
     using reg = Reg;
+    using bus = typename Reg::bus;
     static constexpr unsigned length = msb - lsb;
 
     static constexpr AccessType access_type = AT;
@@ -218,27 +219,35 @@ template <typename Reg, unsigned msb, unsigned lsb, AccessType AT>
 constexpr bool is_field_v<field<Reg, msb, lsb, AT>> = true;
 
 
-template <typename ...Ts>
-concept HasMask = requires {
-    (Ts::mask,...);
+// template <typename ...Ts>
+// concept HasMask = requires {
+//     (Ts::mask,...);
+// };
+
+// template <typename T, typename ...Ts>
+// concept OfSameParentReg = (std::same_as<typename T::reg, typename Ts::reg> && ...);
+
+// template <typename T, typename ...Ts>
+// concept Fieldable = HasMask<T, Ts...> && OfSameParentReg<T, Ts...>;
+
+// template <typename Field0, typename ...Fields>
+// requires Fieldable<Field0, Fields...>
+// struct fields {
+//     using value_type = typename Field0::value_type;
+//     static constexpr value_type layout = (Field0::mask | ... | Fields::mask);
+// };
+
+struct bus {
+    template <typename T, typename Addr>
+    static T read(Addr address);
+    template <typename T, typename Addr>
+    static void write(T val, Addr address);
 };
 
-template <typename T, typename ...Ts>
-concept OfSameParentReg = (std::same_as<typename T::reg, typename Ts::reg> && ...);
-
-template <typename T, typename ...Ts>
-concept Fieldable = HasMask<T, Ts...> && OfSameParentReg<T, Ts...>;
-
-template <typename Field0, typename ...Fields>
-requires Fieldable<Field0, Fields...>
-struct fields {
-    using value_type = typename Field0::value_type;
-    static constexpr value_type layout = (Field0::mask | ... | Fields::mask);
-};
-
-template <typename T, std::size_t addr>
+template <typename T, typename b, std::size_t addr>
 struct reg {
     using value_type = T;
+    using bus = b;
     static constexpr std::size_t address = addr;
 
     // using f = typename DerivedReg::Fields;
@@ -459,13 +468,6 @@ template <typename ...Ts>
 using return_reads_t = typename return_reads<Ts...>::type;
 
 
-namespace user {
-template <typename T, typename Addr>
-T read(Addr address);
-template <typename T, typename Addr>
-void write(T val, Addr address);
-}
-
 // namespace ros {
 
 template<typename ...Fields>
@@ -487,6 +489,7 @@ requires Applicable<Op, Ops...>
 auto apply(Op op, Ops ...ops) -> return_reads_t<decltype(filter::tuple_filter<is_field_read>(std::make_tuple(op, ops...)))> {
     using value_type = typename Op::type::value_type;
     using Reg = typename Op::type::reg;
+    using bus = typename Reg::bus;
 
     value_type value{};
 
@@ -512,7 +515,7 @@ auto apply(Op op, Ops ...ops) -> return_reads_t<decltype(filter::tuple_filter<is
         constexpr bool is_partial_write = (rmw_mask & write_mask != rmw_mask);
 
         if constexpr (is_partial_write) {
-            value = user::read<value_type>(Reg::address);
+            value = bus::template read<value_type>(Reg::address);
         }
 
         value = std::apply(
@@ -520,10 +523,10 @@ auto apply(Op op, Ops ...ops) -> return_reads_t<decltype(filter::tuple_filter<is
                 return (decltype(writes)::type::to_reg(value, writes.value) | ...);
             }, writes);
 
-        ros::user::write(value, Reg::address);
+        bus::write(value, Reg::address);
     } else /* if (return_reads) */ {
         // implicit because if there're no writes, the only possible op is read
-        value = user::read<value_type>(Reg::address);
+        value = bus::template read<value_type>(Reg::address);
     }
 
     auto get_reads = [&value]<typename ...Ts>(std::tuple<Ts...> reads) /* -> ... */ {
@@ -564,20 +567,21 @@ constexpr void print_tuple(std::tuple<Ts...> const& t) {
 }
 
 
-// actual declarations of read/write functions in user space
-template <typename T, typename Addr>
-T ros::user::read(Addr address) {
-    std::cout << "read called on addr " << std::hex << address << std::endl;
-    return T{0x0};
-}
-template <typename T, typename Addr>
-void ros::user::write(T val, Addr address) {
-    std::cout << "write called with " << std::hex << val << " on addr " << address << std::endl;
-}
+struct mmio_bus : ros::bus {
+    template <typename T, typename Addr>
+    static constexpr T read(Addr address) {
+        std::cout << "mmio read called on addr " << std::hex << address << std::endl;
+        return T{0x0};
+    }
+    template <typename T, typename Addr>
+    static constexpr void write(T val, Addr address) {
+        std::cout << "mmio write called with " << std::hex << val << " on addr " << address << std::endl;
+    }
+};
 
 using namespace ros::literals;
 
-struct my_reg : ros::reg<uint32_t, 0x2000> {
+struct my_reg : ros::reg<uint32_t, mmio_bus, 0x2000> {
     ros::field<my_reg, 4, 0, ros::AccessType::RW> field0;
     ros::field<my_reg, 12, 8, ros::AccessType::RW> field1;
     ros::field<my_reg, 20, 16, ros::AccessType::RW> field2;
