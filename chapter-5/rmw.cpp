@@ -238,7 +238,7 @@ struct field_assignment_safe_runtime : field_assignment {
     // should it be static?
     std::optional<typename Field::value_type> value;
 
-    field_assignment_safe_runtime(std::optional<typename Field::value_type> v)
+    constexpr field_assignment_safe_runtime(std::optional<typename Field::value_type> v)
       : value{v} {}
 };
 
@@ -460,7 +460,7 @@ constexpr auto tuple_filter_helper(const Tuple& tuple, std::index_sequence<Is...
 }
 
 template <template <typename> class Predicate, typename Tuple>
-auto tuple_filter(const Tuple& tuple) {
+constexpr auto tuple_filter(const Tuple& tuple) {
     return tuple_filter_helper(tuple, filtered_index_sequence<Predicate>(tuple));
 }
 }
@@ -567,15 +567,13 @@ auto apply(Op op, Ops ...ops) -> return_reads_t<decltype(filter::tuple_filter<is
 
     constexpr bool return_reads = std::disjunction_v<std::is_same<Op, ros::detail::field_read<typename Op::type>>, std::is_same<Ops, ros::detail::field_read<typename Ops::type>>...>;
 
+    // compile-time writes
     auto safe_writes = filter::tuple_filter<is_field_assignment_safe>(std::make_tuple(op, ops...));
-    auto unsafe_writes = filter::tuple_filter<is_field_assignment_unsafe>(std::make_tuple(op, ops...));
+    // runtime writes
     auto safe_runtime_writes = filter::tuple_filter<is_field_assignment_safe_runtime>(std::make_tuple(op, ops...));
-    
-    // can be done in one shot with a type_trait
-    // auto writes = std::tuple_cat(safe_writes, unsafe_writes);
-    auto writes = std::tuple_cat(safe_writes, unsafe_writes);
+    auto unsafe_writes = filter::tuple_filter<is_field_assignment_unsafe>(std::make_tuple(op, ops...));
 
-    // try to split compile time from runtime ops
+    auto runtime_writes = std::tuple_cat(safe_runtime_writes, unsafe_writes);
 
     constexpr value_type write_mask = []<typename ...Ws>(std::tuple<Ws...> const& writes) -> value_type {
         value_type mask{0};
@@ -585,7 +583,7 @@ auto apply(Op op, Ops ...ops) -> return_reads_t<decltype(filter::tuple_filter<is
                 }, writes);
         }
         return mask;
-    }(writes);
+    }(safe_writes);
 
     value_type runtime_write_mask = []<typename ...Ws>(std::tuple<Ws...> const& writes) -> value_type {
         value_type mask{0};
@@ -595,10 +593,11 @@ auto apply(Op op, Ops ...ops) -> return_reads_t<decltype(filter::tuple_filter<is
                 }, writes);
         }
         return mask;
-    }(safe_runtime_writes);
+    }(runtime_writes);
 
-    if constexpr (write_mask != 0) {
-        constexpr value_type rmw_mask = detail::get_rmw_mask(Reg{});
+    constexpr value_type rmw_mask = detail::get_rmw_mask(Reg{});
+
+    if constexpr (write_mask != 0) { // mix of runtime and compile-time
         constexpr bool is_partial_write = (rmw_mask & write_mask != rmw_mask);
 
         if constexpr (is_partial_write) {
@@ -608,9 +607,7 @@ auto apply(Op op, Ops ...ops) -> return_reads_t<decltype(filter::tuple_filter<is
         value = std::apply(
             [&value](auto ...writes) {
                 return (decltype(writes)::type::to_reg(value, writes.value) | ...);
-            }, writes);
-
-        std::cout << std::hex << value << std::endl;
+            }, safe_writes);
 
         if (runtime_write_mask != 0) {
             value |= std::apply(
@@ -620,7 +617,19 @@ auto apply(Op op, Ops ...ops) -> return_reads_t<decltype(filter::tuple_filter<is
                 }, safe_runtime_writes);
         }
 
-        std::cout << std::hex << value << std::endl;
+        bus::write(value, Reg::address::value);
+    } else if (runtime_write_mask != 0) { // only runtime writes
+        bool is_partial_write = (rmw_mask & runtime_write_mask != rmw_mask);
+
+        if (is_partial_write) {
+            value = bus::template read<value_type>(Reg::address::value);
+        }
+
+        value = std::apply(
+            [&value](auto ...writes) {
+                // return (decltype(writes)::type::to_reg(value, *writes.value) | ...);
+                return ros::detail::get_runtime_value<value_type>(value, writes...);
+            }, safe_runtime_writes);
 
         bus::write(value, Reg::address::value);
     } else /* if (return_reads) */ {
@@ -669,12 +678,12 @@ constexpr void print_tuple(std::tuple<Ts...> const& t) {
 struct mmio_bus : ros::bus {
     template <typename T, typename Addr>
     static constexpr T read(Addr address) {
-        // std::cout << "mmio read called on addr " << std::hex << address << std::endl;
+        std::cout << "mmio read called on addr " << std::hex << address << std::endl;
         return T{0x0};
     }
     template <typename T, typename Addr>
     static constexpr void write(T val, Addr address) {
-        // std::cout << "mmio write called with " << std::hex << val << " on addr " << address << std::endl;
+        std::cout << "mmio write called with " << std::hex << val << " on addr " << address << std::endl;
     }
 };
 
@@ -701,11 +710,13 @@ int main() {
     //                       r0.field3.read());
 
     // // multi-field write/read syntax
-    auto [f0, f1] = apply(r0.field0 = 0xf_f,
-                          r0.field1 = 12_f,
-                          r0.field2 = 13,
-                          r0.field0.read(),
-                          r0.field2.read());
+    // auto [f0, f1] = apply(r0.field0 = 0xf_f,
+    //                       r0.field1 = 12_f,
+    //                       r0.field2 = 13,
+    //                       r0.field0.read(),
+    //                       r0.field2.read());
+
+    apply(r0.field2 = 13);
 
     // std::cout << typeid(decltype(apply(r0.field0 = 0xf_f,
     //     r0.field1 = 12_f,
@@ -713,8 +724,8 @@ int main() {
     //     r0.field0.read(),
     //     r0.field1.read()))).name() << std::endl;
 
-    std::cout << std::hex << f0 << std::endl;
-    std::cout << std::hex << f1 << std::endl;
+    // std::cout << std::hex << f0 << std::endl;
+    // std::cout << std::hex << f1 << std::endl;
 
     // unsafe writes
     // apply(r0.field0.unsafe = 23,
