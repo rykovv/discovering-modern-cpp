@@ -110,6 +110,8 @@ struct field_assignment;
 template <typename Field, typename Field::value_type val>
 struct field_assignment_safe;
 template <typename Field>
+struct field_assignment_safe_runtime;
+template <typename Field>
 struct field_assignment_unsafe;
 template <typename Field>
 struct field_read;
@@ -137,18 +139,20 @@ struct field {
         }
     }();
 
-    constexpr field(value_type v)
-        : value{v}
-    {}
+    // constexpr field(value_type v)
+    //     : value{v}
+    // {}
 
-    constexpr field() : field(0) {};
+    constexpr field() = default;
+
+    // constexpr field() : field(0) {};
 
     template <typename U, U val>
     requires (std::is_convertible_v<U, value_type>)
     constexpr auto operator= (std::integral_constant<U, val>) -> ros::detail::field_assignment_safe<field, val> {
         static_assert(access_type != AccessType::RO, "cannot write read-only field");
         static_assert(val <= (mask >> lsb), "assigned value greater than allowed");
-        value = val;
+        // value = val;
         return ros::detail::field_assignment_safe<field, val>{};
     }
 
@@ -156,16 +160,45 @@ struct field {
         static_assert(access_type != AccessType::RO, "cannot write read-only field");
         using rhs_type = std::remove_reference_t<decltype(rhs)>;
         static_assert(rhs_type::length <= msb - lsb, "larger field cannot be safely assigned to a narrower one");
-        value = rhs.value;
-        return ros::detail::field_assignment_safe<field, value>{};
+        // value = rhs.value;
+        return ros::detail::field_assignment_safe<field, rhs.value>{};
     }
 
     constexpr auto operator= (auto && rhs) -> ros::detail::field_assignment_safe<field, decltype(rhs)::value> {
         static_assert(access_type != AccessType::RO, "cannot write read-only field");
         using rhs_type = std::remove_reference_t<decltype(rhs)>;
         static_assert(rhs_type::length <= msb - lsb, "larger field cannot be safely assigned to a narrower one");
-        value = rhs.value;
-        return ros::detail::field_assignment_safe<field, value>{};
+        // value = rhs.value;
+        return ros::detail::field_assignment_safe<field, rhs.value>{};
+    }
+
+    // [TODO] create concept
+    template <typename T>
+    requires (std::is_convertible_v<T, value_type> &&
+              std::numeric_limits<T>::digits >= msb - lsb)
+    constexpr auto operator= (T const& rhs) -> ros::detail::field_assignment_safe_runtime<field> {
+        static_assert(access_type != AccessType::RO, "cannot write read-only field");
+        // value = rhs;
+        // std::cout << "safe runtime ctor" << std::endl;
+        return ros::detail::field_assignment_safe_runtime<field>{rhs};
+    }
+
+    template <typename T>
+    requires (std::is_convertible_v<T, value_type> &&
+              std::numeric_limits<T>::digits >= msb - lsb)// &&
+    // requires {requires std::unsigned_integral<T>;} // issues warning if uncommented
+    constexpr auto operator= (T && rhs) -> ros::detail::field_assignment_safe_runtime<field> {
+        static_assert(access_type != AccessType::RO, "cannot write read-only field");
+        // value = rhs;
+        // std::cout << "safe runtime ctor xref" << std::endl;
+
+        std::optional<value_type> opt_rhs;
+        if (rhs <= mask >> lsb) {
+            opt_rhs = rhs;
+        }
+        // ask Mike about narrowing conversion from int to unsigned int warning
+        // return ros::detail::field_assignment_safe_runtime<field>{rhs};
+        return ros::detail::field_assignment_safe_runtime<field>(opt_rhs);
     }
 
     static constexpr value_type update (value_type old_value, value_type new_value) {
@@ -187,7 +220,7 @@ struct field {
         return ros::detail::field_read<field>{};
     }
 
-    value_type value;
+    // value_type value;
 };
 
 namespace detail {
@@ -197,6 +230,16 @@ template <typename Field, typename Field::value_type val>
 struct field_assignment_safe : field_assignment {
     using type = Field;
     static constexpr typename Field::value_type value = val;
+};
+
+template <typename Field>
+struct field_assignment_safe_runtime : field_assignment {
+    using type = Field;
+    // should it be static?
+    std::optional<typename Field::value_type> value;
+
+    field_assignment_safe_runtime(std::optional<typename Field::value_type> v)
+      : value{v} {}
 };
 
 template <typename Field>
@@ -244,8 +287,9 @@ struct bus {
     static void write(T val, Addr address);
 };
 
-template <typename T, typename b, std::size_t addr>
+template <typename r, typename T, typename b, std::size_t addr>
 struct reg {
+    using Reg = r;
     using value_type = T;
     using bus = b;
     using address = std::integral_constant<std::size_t, addr>;
@@ -269,7 +313,7 @@ constexpr auto operator""_f () {
     using T = std::size_t; // platform max
     constexpr T new_value = ros::detail::to_unsigned_const<T, Chars...>();
     
-    std::cout << "<new value>_f = " << new_value << std::endl;
+    // std::cout << "<new value>_f = " << new_value << std::endl;
 
     return std::integral_constant<T, new_value>{};
 }
@@ -445,6 +489,16 @@ struct is_field_assignment_safe<ros::detail::field_assignment_safe<Field, val>> 
 };
 
 template <typename>
+struct is_field_assignment_safe_runtime {
+    static constexpr bool value = false;
+};
+
+template <typename Field>
+struct is_field_assignment_safe_runtime<ros::detail::field_assignment_safe_runtime<Field>> {
+    static constexpr bool value = true;
+};
+
+template <typename>
 struct is_field_assignment_unsafe {
     static constexpr bool value = false;
 };
@@ -468,13 +522,31 @@ template <typename ...Ts>
 using return_reads_t = typename return_reads<Ts...>::type;
 
 
+namespace detail {
+template <typename T>
+T get_runtime_value(T const& value) {
+    return value;
+}
+
+template <typename T>
+T get_runtime_value(T const& value, auto write, auto ...writes) {
+    if (!write.value) {
+        // [TODO] elaborate better error handling
+        std::cout << "Ignored assignment! Attempt to assign a value greater than the allowed field max." << std::endl;
+        return get_runtime_value<T>(value, writes...);
+    } else {
+        return decltype(write)::type::to_reg(value, *write.value) | get_runtime_value<T>(value, writes...);
+    }
+}
+}
+
 // namespace ros {
 
 template<typename ...Fields>
 void apply(Fields ...fields);
 
-template<>
-void apply() {};
+// template<>
+// void apply() {};
 
 template<typename Op, typename ...Ops>
 concept Applicable = (
@@ -497,10 +569,15 @@ auto apply(Op op, Ops ...ops) -> return_reads_t<decltype(filter::tuple_filter<is
 
     auto safe_writes = filter::tuple_filter<is_field_assignment_safe>(std::make_tuple(op, ops...));
     auto unsafe_writes = filter::tuple_filter<is_field_assignment_unsafe>(std::make_tuple(op, ops...));
+    auto safe_runtime_writes = filter::tuple_filter<is_field_assignment_safe_runtime>(std::make_tuple(op, ops...));
+    
     // can be done in one shot with a type_trait
+    // auto writes = std::tuple_cat(safe_writes, unsafe_writes);
     auto writes = std::tuple_cat(safe_writes, unsafe_writes);
 
-    constexpr value_type write_mask = []<typename ...Ws>(std::tuple<Ws...> const& writes) {
+    // try to split compile time from runtime ops
+
+    constexpr value_type write_mask = []<typename ...Ws>(std::tuple<Ws...> const& writes) -> value_type {
         value_type mask{0};
         if constexpr (sizeof ...(Ws) > 0) {
             std::apply([&mask](auto ...ops) {
@@ -509,6 +586,16 @@ auto apply(Op op, Ops ...ops) -> return_reads_t<decltype(filter::tuple_filter<is
         }
         return mask;
     }(writes);
+
+    value_type runtime_write_mask = []<typename ...Ws>(std::tuple<Ws...> const& writes) -> value_type {
+        value_type mask{0};
+        if constexpr (sizeof ...(Ws) > 0) {
+            std::apply([&mask](auto ...ops) {
+                    mask = (decltype(ops)::type::mask | ...);
+                }, writes);
+        }
+        return mask;
+    }(safe_runtime_writes);
 
     if constexpr (write_mask != 0) {
         constexpr value_type rmw_mask = detail::get_rmw_mask(Reg{});
@@ -522,6 +609,18 @@ auto apply(Op op, Ops ...ops) -> return_reads_t<decltype(filter::tuple_filter<is
             [&value](auto ...writes) {
                 return (decltype(writes)::type::to_reg(value, writes.value) | ...);
             }, writes);
+
+        std::cout << std::hex << value << std::endl;
+
+        if (runtime_write_mask != 0) {
+            value |= std::apply(
+                [&value](auto ...writes) {
+                    // return (decltype(writes)::type::to_reg(value, *writes.value) | ...);
+                    return ros::detail::get_runtime_value<value_type>(value, writes...);
+                }, safe_runtime_writes);
+        }
+
+        std::cout << std::hex << value << std::endl;
 
         bus::write(value, Reg::address::value);
     } else /* if (return_reads) */ {
@@ -570,18 +669,18 @@ constexpr void print_tuple(std::tuple<Ts...> const& t) {
 struct mmio_bus : ros::bus {
     template <typename T, typename Addr>
     static constexpr T read(Addr address) {
-        std::cout << "mmio read called on addr " << std::hex << address << std::endl;
+        // std::cout << "mmio read called on addr " << std::hex << address << std::endl;
         return T{0x0};
     }
     template <typename T, typename Addr>
     static constexpr void write(T val, Addr address) {
-        std::cout << "mmio write called with " << std::hex << val << " on addr " << address << std::endl;
+        // std::cout << "mmio write called with " << std::hex << val << " on addr " << address << std::endl;
     }
 };
 
 using namespace ros::literals;
 
-struct my_reg : ros::reg<uint32_t, mmio_bus, 0x2000> {
+struct my_reg : ros::reg<my_reg, uint32_t, mmio_bus, 0x2000> {
     ros::field<my_reg, 4, 0, ros::AccessType::RW> field0;
     ros::field<my_reg, 12, 8, ros::AccessType::RW> field1;
     ros::field<my_reg, 20, 16, ros::AccessType::RW> field2;
@@ -601,12 +700,18 @@ int main() {
     // auto [f2, f3] = apply(r0.field2.read(),
     //                       r0.field3.read());
 
-    // multi-field write/read syntax
+    // // multi-field write/read syntax
     auto [f0, f1] = apply(r0.field0 = 0xf_f,
                           r0.field1 = 12_f,
-                          r0.field2 = 2_f,
+                          r0.field2 = 13,
                           r0.field0.read(),
-                          r0.field1.read());
+                          r0.field2.read());
+
+    // std::cout << typeid(decltype(apply(r0.field0 = 0xf_f,
+    //     r0.field1 = 12_f,
+    //     r0.field2 = {2},
+    //     r0.field0.read(),
+    //     r0.field1.read()))).name() << std::endl;
 
     std::cout << std::hex << f0 << std::endl;
     std::cout << std::hex << f1 << std::endl;
@@ -636,7 +741,7 @@ int main() {
     // }));
 
     auto t = ros::reflect::to_tuple(r0);
-    print_tuple(t);
+    // print_tuple(t);
 
     // single-field read syntax
     uint8_t v;
