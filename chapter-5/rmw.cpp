@@ -139,13 +139,7 @@ struct field {
         }
     }();
 
-    // constexpr field(value_type v)
-    //     : value{v}
-    // {}
-
     constexpr field() = default;
-
-    // constexpr field() : field(0) {};
 
     template <typename U, U val>
     requires (std::is_convertible_v<U, value_type>)
@@ -219,8 +213,6 @@ struct field {
         // to be substituted with read template expr
         return ros::detail::field_read<field>{};
     }
-
-    // value_type value;
 };
 
 namespace detail {
