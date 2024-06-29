@@ -123,7 +123,7 @@ struct field {
     using value_type = typename Reg::value_type;
     using reg = Reg;
     using bus = typename Reg::bus;
-    static constexpr unsigned length = msb - lsb;
+    using length = std::integral_constant<unsigned, msb - lsb>;
 
     static constexpr AccessType access_type = AT;
 
@@ -146,7 +146,6 @@ struct field {
     constexpr auto operator= (std::integral_constant<U, val>) -> ros::detail::field_assignment_safe<field, val> {
         static_assert(access_type != AccessType::RO, "cannot write read-only field");
         static_assert(val <= (mask >> lsb), "assigned value greater than allowed");
-        // value = val;
         return ros::detail::field_assignment_safe<field, val>{};
     }
 
@@ -154,7 +153,6 @@ struct field {
         static_assert(access_type != AccessType::RO, "cannot write read-only field");
         using rhs_type = std::remove_reference_t<decltype(rhs)>;
         static_assert(rhs_type::length <= msb - lsb, "larger field cannot be safely assigned to a narrower one");
-        // value = rhs.value;
         return ros::detail::field_assignment_safe<field, rhs.value>{};
     }
 
@@ -162,7 +160,6 @@ struct field {
         static_assert(access_type != AccessType::RO, "cannot write read-only field");
         using rhs_type = std::remove_reference_t<decltype(rhs)>;
         static_assert(rhs_type::length <= msb - lsb, "larger field cannot be safely assigned to a narrower one");
-        // value = rhs.value;
         return ros::detail::field_assignment_safe<field, rhs.value>{};
     }
 
@@ -172,8 +169,6 @@ struct field {
               std::numeric_limits<T>::digits >= msb - lsb)
     constexpr auto operator= (T const& rhs) -> ros::detail::field_assignment_safe_runtime<field> {
         static_assert(access_type != AccessType::RO, "cannot write read-only field");
-        // value = rhs;
-        // std::cout << "safe runtime ctor" << std::endl;
         return ros::detail::field_assignment_safe_runtime<field>{rhs};
     }
 
@@ -183,8 +178,6 @@ struct field {
     // requires {requires std::unsigned_integral<T>;} // issues warning if uncommented
     constexpr auto operator= (T && rhs) -> ros::detail::field_assignment_safe_runtime<field> {
         static_assert(access_type != AccessType::RO, "cannot write read-only field");
-        // value = rhs;
-        // std::cout << "safe runtime ctor xref" << std::endl;
 
         std::optional<value_type> opt_rhs;
         if (rhs <= mask >> lsb) {
@@ -210,7 +203,6 @@ struct field {
     }
 
     constexpr auto read() const -> ros::detail::field_read<field> {
-        // to be substituted with read template expr
         return ros::detail::field_read<field>{};
     }
 };
@@ -321,10 +313,11 @@ struct UniversalType {
 
 template<typename T>
 consteval auto MemberCounter(auto ...Members) {
-    if constexpr (requires { T{ Members... }; } == false)
+    if constexpr (requires { T{ Members... }; } == false) {
         return sizeof...(Members) - 2;
-    else
+    } else {
         return MemberCounter<T>(Members..., UniversalType{});
+    }
 }
 
 template <typename T>
@@ -702,13 +695,13 @@ int main() {
     //                       r0.field3.read());
 
     // // multi-field write/read syntax
-    // auto [f0, f1] = apply(r0.field0 = 0xf_f,
-    //                       r0.field1 = 12_f,
-    //                       r0.field2 = 13,
-    //                       r0.field0.read(),
-    //                       r0.field2.read());
+    auto [f0, f1] = apply(r0.field0 = 0xf_f,
+                          r0.field1 = 12_f,
+                          r0.field2 = 13,
+                          r0.field0.read(),
+                          r0.field2.read());
 
-    apply(r0.field2 = 13);
+    // apply(r0.field2 = 13);
 
     // std::cout << typeid(decltype(apply(r0.field0 = 0xf_f,
     //     r0.field1 = 12_f,
