@@ -169,7 +169,13 @@ struct field {
               std::numeric_limits<T>::digits >= msb - lsb)
     constexpr auto operator= (T const& rhs) -> ros::detail::field_assignment_safe_runtime<field> {
         static_assert(access_type != AccessType::RO, "cannot write read-only field");
-        return ros::detail::field_assignment_safe_runtime<field>{rhs};
+        
+        std::optional<value_type> opt_rhs;
+        if (rhs <= mask >> lsb) {
+            opt_rhs = rhs;
+        }
+
+        return ros::detail::field_assignment_safe_runtime<field>{opt_rhs};
     }
 
     template <typename T>
@@ -693,11 +699,11 @@ int main() {
     // multi-field read syntax
     // auto [f2, f3] = apply(r0.field2.read(),
     //                       r0.field3.read());
-
+    unsigned t = 13;
     // // multi-field write/read syntax
     auto [f0, f1] = apply(r0.field0 = 0xf_f,
                           r0.field1 = 12_f,
-                          r0.field2 = 13,
+                          r0.field2 = t,
                           r0.field0.read(),
                           r0.field2.read());
 
@@ -736,7 +742,7 @@ int main() {
     //     return v*2;
     // }));
 
-    auto t = ros::reflect::to_tuple(r0);
+    // auto t = ros::reflect::to_tuple(r0);
     // print_tuple(t);
 
     // single-field read syntax
