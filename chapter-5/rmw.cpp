@@ -547,6 +547,8 @@ template <typename T>
 T get_safe_runtime_value(T const& value, auto write, auto ...writes) {
     if (!write.value) {
         // [TODO] elaborate better error handling
+        // idea: provide user-defined way to handle error: ignore, clamp
+        // idea: provide user-defined way to report error: callback
         std::cout << "Ignored assignment! Attempt to assign a value greater than the allowed field max." << std::endl;
         return get_safe_runtime_value<T>(value, writes...);
     } else {
