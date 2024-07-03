@@ -116,10 +116,17 @@ struct field_assignment_unsafe;
 template <typename Field>
 struct field_read;
 
-template <typename T>
+template <typename Field>
 struct unsafe_operations_handler {
+    constexpr auto operator= (auto const& rhs) -> field_assignment_unsafe<Field> {
+        // narrowing conversion from int to unsigned int
+        return ros::detail::field_assignment_unsafe<Field>(rhs);
+    }
 
-    T value;
+    constexpr auto operator= (auto && rhs) -> field_assignment_unsafe<Field> {
+        // narrowing conversion from int to unsigned int
+        return field_assignment_unsafe<Field>(rhs);
+    }
 };
 }
 
@@ -192,7 +199,7 @@ struct field {
     constexpr auto operator= (T && rhs) -> ros::detail::field_assignment_safe_runtime<field> {
         static_assert(access_type != AccessType::RO, "cannot write read-only field");
         static_assert(std::numeric_limits<value_type>::digits >= std::numeric_limits<T>::digits, "Unsafe assignment. Assigned value type is too wide.");
-        
+
         std::optional<value_type> opt_rhs;
         if (rhs <= mask >> lsb) {
             opt_rhs = rhs;
@@ -219,6 +226,8 @@ struct field {
     constexpr auto read() const -> ros::detail::field_read<field> {
         return ros::detail::field_read<field>{};
     }
+
+    ros::detail::unsafe_operations_handler<field> unsafe;
 };
 
 namespace detail {
@@ -233,18 +242,25 @@ struct field_assignment_safe : field_assignment {
 template <typename Field>
 struct field_assignment_safe_runtime : field_assignment {
     using type = Field;
-    // should it be static?
-    std::optional<typename Field::value_type> value;
+    using value_type = typename Field::value_type;
 
-    constexpr field_assignment_safe_runtime(std::optional<typename Field::value_type> v)
+    constexpr field_assignment_safe_runtime(std::optional<value_type> v)
       : value{v} {}
+
+    // should it be static?
+    std::optional<value_type> value;
 };
 
 template <typename Field>
 struct field_assignment_unsafe : field_assignment {
     using type = Field;
+    using value_type = typename Field::value_type;
+
+    constexpr field_assignment_unsafe(value_type v)
+      : value{v} {}
+
     // should it be static?
-    typename Field::value_type value;
+    value_type value;
 };
 
 template <typename Field>
@@ -523,19 +539,29 @@ using return_reads_t = typename return_reads<Ts...>::type;
 
 namespace detail {
 template <typename T>
-T get_runtime_value(T const& value) {
+T get_safe_runtime_value(T const& value) {
     return value;
 }
 
 template <typename T>
-T get_runtime_value(T const& value, auto write, auto ...writes) {
+T get_safe_runtime_value(T const& value, auto write, auto ...writes) {
     if (!write.value) {
         // [TODO] elaborate better error handling
         std::cout << "Ignored assignment! Attempt to assign a value greater than the allowed field max." << std::endl;
-        return get_runtime_value<T>(value, writes...);
+        return get_safe_runtime_value<T>(value, writes...);
     } else {
-        return decltype(write)::type::to_reg(value, *write.value) | get_runtime_value<T>(value, writes...);
+        return decltype(write)::type::to_reg(value, *write.value) | get_safe_runtime_value<T>(value, writes...);
     }
+}
+
+template <typename T>
+T get_unsafe_runtime_value(T const& value) {
+    return value;
+}
+
+template <typename T>
+T get_unsafe_runtime_value(T const& value, auto write, auto ...writes) {
+    return decltype(write)::type::to_reg(value, write.value) | get_unsafe_runtime_value<T>(value, writes...);
 }
 }
 
@@ -561,6 +587,8 @@ auto apply(Op op, Ops ...ops) -> return_reads_t<decltype(filter::tuple_filter<is
     using value_type = typename Op::type::value_type;
     using Reg = typename Op::type::reg;
     using bus = typename Reg::bus;
+
+    // [TODO] static_assert on only one assignment operation per field per apply
 
     value_type value{};
 
@@ -594,6 +622,8 @@ auto apply(Op op, Ops ...ops) -> return_reads_t<decltype(filter::tuple_filter<is
         return mask;
     }(runtime_writes);
 
+    // std::cout << std::hex << runtime_write_mask << std::endl;
+
     constexpr value_type rmw_mask = detail::get_rmw_mask(Reg{});
 
     if constexpr (write_mask != 0) { // mix of runtime and compile-time
@@ -612,8 +642,14 @@ auto apply(Op op, Ops ...ops) -> return_reads_t<decltype(filter::tuple_filter<is
             value |= std::apply(
                 [&value](auto ...writes) {
                     // return (decltype(writes)::type::to_reg(value, *writes.value) | ...);
-                    return ros::detail::get_runtime_value<value_type>(value, writes...);
+                    return ros::detail::get_safe_runtime_value<value_type>(value, writes...);
                 }, safe_runtime_writes);
+
+            value |= std::apply(
+                [&value](auto ...writes) {
+                    // return (decltype(writes)::type::to_reg(value, *writes.value) | ...);
+                    return ros::detail::get_unsafe_runtime_value<value_type>(value, writes...);
+                }, unsafe_writes);
         }
 
         bus::write(value, Reg::address::value);
@@ -627,8 +663,13 @@ auto apply(Op op, Ops ...ops) -> return_reads_t<decltype(filter::tuple_filter<is
         value = std::apply(
             [&value](auto ...writes) {
                 // return (decltype(writes)::type::to_reg(value, *writes.value) | ...);
-                return ros::detail::get_runtime_value<value_type>(value, writes...);
+                return ros::detail::get_safe_runtime_value<value_type>(value, writes...);
             }, safe_runtime_writes);
+
+        value |= std::apply(
+            [&value](auto ...writes) {
+                return ros::detail::get_unsafe_runtime_value<value_type>(value, writes...);
+            }, unsafe_writes);
 
         bus::write(value, Reg::address::value);
     } else /* if (return_reads) */ {
@@ -709,11 +750,11 @@ int main() {
     //                       r0.field3.read());
     uint32_t t = 13;
     // multi-field write/read syntax
-    auto [f0, f1] = apply(r0.field0 = 0xf_f,
-                          r0.field1 = 12_f,
-                          r0.field2 = t,
-                          r0.field0.read(),
-                          r0.field2.read());
+    // auto [f0, f1] = apply(r0.field0 = 0xf_f,
+    //                       r0.field1 = 12_f,
+    //                       r0.field2 = t,
+    //                       r0.field0.read(),
+    //                       r0.field2.read());
 
     // apply(r0.field2 = 13);
 
@@ -727,8 +768,9 @@ int main() {
     // std::cout << std::hex << f1 << std::endl;
 
     // unsafe writes
-    // apply(r0.field0.unsafe = 23,
-    //       r0.field1.unsafe = foo);
+    uint64_t foo = 0x10;
+    apply(r0.field0.unsafe = 0x1,
+          r0.field1.unsafe = foo);
 
     // read
     // uint16_t value;
