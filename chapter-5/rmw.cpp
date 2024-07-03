@@ -115,6 +115,12 @@ template <typename Field>
 struct field_assignment_unsafe;
 template <typename Field>
 struct field_read;
+
+template <typename T>
+struct unsafe_operations_handler {
+
+    T value;
+};
 }
 
 template <typename Reg, unsigned msb, unsigned lsb, AccessType AT>
@@ -185,7 +191,8 @@ struct field {
     // requires {requires std::unsigned_integral<T>;} // issues warning if uncommented
     constexpr auto operator= (T && rhs) -> ros::detail::field_assignment_safe_runtime<field> {
         static_assert(access_type != AccessType::RO, "cannot write read-only field");
-
+        static_assert(std::numeric_limits<value_type>::digits >= std::numeric_limits<T>::digits, "Unsafe assignment. Assigned value type is too wide.");
+        
         std::optional<value_type> opt_rhs;
         if (rhs <= mask >> lsb) {
             opt_rhs = rhs;
@@ -700,7 +707,7 @@ int main() {
     // multi-field read syntax
     // auto [f2, f3] = apply(r0.field2.read(),
     //                       r0.field3.read());
-    uint64_t t = 13;
+    uint32_t t = 13;
     // multi-field write/read syntax
     auto [f0, f1] = apply(r0.field0 = 0xf_f,
                           r0.field1 = 12_f,
