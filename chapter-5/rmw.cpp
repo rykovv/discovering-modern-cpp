@@ -5,6 +5,7 @@
 #include <type_traits>
 #include <tuple>
 #include <typeinfo>
+#include <expected>
 
 // Register Optimization with Safety (ROS)
 
@@ -130,6 +131,46 @@ struct unsafe_operations_handler {
 };
 }
 
+namespace error {
+    enum class ErrorHandling {
+        Ignore,
+        Clamp
+    };
+    enum class ErrorType {
+        InvalidValue
+    };
+
+    using ErrorCallback = void(*)(ErrorType);
+    template <typename Field>
+    using ErrorHandler = typename Field::value_type(*)();
+    
+    ErrorHandling handle = ErrorHandling::Ignore;
+    ErrorCallback callback = [](ErrorType e) -> void {
+        if (e == ErrorType::InvalidValue) {
+            std::cout << "Error occured: Invalid Value" << std::endl;
+        } else {
+            std::cout << "Error occured: Undefined" << std::endl;
+        }
+    };
+
+    template <typename Field, typename T = typename Field::value_type>
+    constexpr ErrorHandler<Field> ignoreHandler = []() -> T {
+        return T{0};
+    };
+    template <typename Field, typename T = typename Field::value_type>
+    constexpr ErrorHandler<Field> clampHandler = []() -> T {
+        return T{Field::mask >> Field::lsb};
+    };
+    template <typename Field>
+    constexpr ErrorHandler<Field> handler = []() -> typename Field::value_type {
+        if (handle == ErrorHandling::Ignore) {
+            return ros::error::ignoreHandler<Field, typename Field::value_type>();
+        } else if (handle == ErrorHandling::Clamp) {
+            return ros::error::clampHandler<Field, typename Field::value_type>();
+        }
+    };
+}
+
 template <typename Reg, unsigned msb, unsigned lsb, AccessType AT>
 requires FieldSelectable<typename Reg::value_type, msb, lsb>
 struct field {
@@ -184,9 +225,12 @@ struct field {
         static_assert(access_type != AccessType::RO, "cannot write read-only field");
         static_assert(std::numeric_limits<value_type>::digits >= std::numeric_limits<T>::digits, "Unsafe assignment. Assigned value type is too wide.");
 
-        std::optional<value_type> opt_rhs;
+        // std::optional<value_type> opt_rhs;
+        std::expected<value_type, ros::error::ErrorType> opt_rhs;
         if (rhs <= mask >> lsb) {
             opt_rhs = rhs;
+        } else {
+            opt_rhs = std::unexpected(ros::error::ErrorType::InvalidValue);
         }
 
         return ros::detail::field_assignment_safe_runtime<field>{opt_rhs};
@@ -200,9 +244,11 @@ struct field {
         static_assert(access_type != AccessType::RO, "cannot write read-only field");
         static_assert(std::numeric_limits<value_type>::digits >= std::numeric_limits<T>::digits, "Unsafe assignment. Assigned value type is too wide.");
 
-        std::optional<value_type> opt_rhs;
+        std::expected<value_type, ros::error::ErrorType> opt_rhs;
         if (rhs <= mask >> lsb) {
             opt_rhs = rhs;
+        } else {
+            opt_rhs = std::unexpected(ros::error::ErrorType::InvalidValue);
         }
         // ask Mike about narrowing conversion from int to unsigned int warning
         // return ros::detail::field_assignment_safe_runtime<field>{rhs};
@@ -244,11 +290,11 @@ struct field_assignment_safe_runtime : field_assignment {
     using type = Field;
     using value_type = typename Field::value_type;
 
-    constexpr field_assignment_safe_runtime(std::optional<value_type> v)
+    constexpr field_assignment_safe_runtime(std::expected<value_type, ros::error::ErrorType> v)
       : value{v} {}
 
     // should it be static?
-    std::optional<value_type> value;
+    std::expected<value_type, ros::error::ErrorType> value;
 };
 
 template <typename Field>
@@ -549,8 +595,9 @@ T get_safe_runtime_value(T const& value, auto write, auto ...writes) {
         // [TODO] elaborate better error handling
         // idea: provide user-defined way to handle error: ignore, clamp
         // idea: provide user-defined way to report error: callback
-        std::cout << "Ignored assignment! Attempt to assign a value greater than the allowed field max." << std::endl;
-        return get_safe_runtime_value<T>(value, writes...);
+        ros::error::callback(write.value.error());
+        // std::cout << "Ignored assignment! Attempt to assign a value greater than the allowed field max." << std::endl;
+        return ros::error::handler<decltype(write)::type>() | get_safe_runtime_value<T>(value, writes...);
     } else {
         return decltype(write)::type::to_reg(value, *write.value) | get_safe_runtime_value<T>(value, writes...);
     }
@@ -750,13 +797,13 @@ int main() {
     // multi-field read syntax
     // auto [f2, f3] = apply(r0.field2.read(),
     //                       r0.field3.read());
-    uint32_t t = 13;
+    uint32_t t = 15;
     // multi-field write/read syntax
-    // auto [f0, f1] = apply(r0.field0 = 0xf_f,
-    //                       r0.field1 = 12_f,
-    //                       r0.field2 = t,
-    //                       r0.field0.read(),
-    //                       r0.field2.read());
+    auto [f0, f1] = apply(r0.field0 = 0xf_f,
+                          r0.field1 = 12_f,
+                          r0.field2 = t,
+                          r0.field0.read(),
+                          r0.field2.read());
 
     // apply(r0.field2 = 13);
 
@@ -770,9 +817,9 @@ int main() {
     // std::cout << std::hex << f1 << std::endl;
 
     // unsafe writes
-    uint64_t foo = 0x10;
-    apply(r0.field0.unsafe = 0x1,
-          r0.field1.unsafe = foo);
+    // uint64_t foo = 0x10;
+    // apply(r0.field0.unsafe = 0x1,
+    //       r0.field1.unsafe = foo);
 
     // read
     // uint16_t value;
