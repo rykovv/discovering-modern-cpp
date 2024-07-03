@@ -169,7 +169,8 @@ struct field {
               std::numeric_limits<T>::digits >= msb - lsb)
     constexpr auto operator= (T const& rhs) -> ros::detail::field_assignment_safe_runtime<field> {
         static_assert(access_type != AccessType::RO, "cannot write read-only field");
-        
+        static_assert(std::numeric_limits<value_type>::digits >= std::numeric_limits<T>::digits, "Unsafe assignment. Assigned value type is too wide.");
+
         std::optional<value_type> opt_rhs;
         if (rhs <= mask >> lsb) {
             opt_rhs = rhs;
@@ -699,8 +700,8 @@ int main() {
     // multi-field read syntax
     // auto [f2, f3] = apply(r0.field2.read(),
     //                       r0.field3.read());
-    unsigned t = 13;
-    // // multi-field write/read syntax
+    uint64_t t = 13;
+    // multi-field write/read syntax
     auto [f0, f1] = apply(r0.field0 = 0xf_f,
                           r0.field1 = 12_f,
                           r0.field2 = t,
