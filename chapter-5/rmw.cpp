@@ -22,16 +22,12 @@ concept FieldSelectable = requires {
 );
 
 namespace detail {
-template <char Char>
-struct is_decimal_digit {
-    static constexpr bool value = Char - '0' >= 0 && Char - '0' <= 9;
-};
 
 template <char Char>
-constexpr bool is_decimal_digit_v = ros::detail::is_decimal_digit<Char>::value;
+constexpr bool is_decimal_digit_v = Char - '0' >= 0 && Char - '0' <= 9;
 
 template <char ...Chars>
-concept DecimalNumber = (ros::detail::is_decimal_digit_v<Chars> && ...);
+concept DecimalNumber = (is_decimal_digit_v<Chars> && ...);
 
 template <typename T, char... Chars>
 requires DecimalNumber<Chars...>
@@ -52,18 +48,10 @@ requires DecimalNumber<Chars...>
 }
 
 template <char Char>
-struct is_x {
-    static constexpr bool value = Char == 'x';
-};
-template <char Char>
-constexpr bool is_x_v = ros::detail::is_x<Char>::value;
+constexpr bool is_x_v = Char == 'x';
 
 template <char Char>
-struct is_0 {
-    static constexpr bool value = Char == '0';
-};
-template <char Char>
-constexpr bool is_0_v = ros::detail::is_0<Char>::value;
+constexpr bool is_0_v = Char == '0';
 
 template <char Char>
 struct is_hex_char {
@@ -203,24 +191,26 @@ struct field {
         return ros::detail::field_assignment_safe<field, val>{};
     }
 
-    constexpr auto operator= (auto const& rhs) -> ros::detail::field_assignment_safe<field, decltype(rhs)::value> {
-        static_assert(access_type != AccessType::RO, "cannot write read-only field");
-        using rhs_type = std::remove_reference_t<decltype(rhs)>;
-        static_assert(rhs_type::length <= msb - lsb, "larger field cannot be safely assigned to a narrower one");
-        return ros::detail::field_assignment_safe<field, rhs.value>{};
-    }
+    // field-to-field assignment needs elaboration
+    // constexpr auto operator= (auto const& rhs) -> ros::detail::field_assignment_safe<field, decltype(rhs)::value> {
+    //     static_assert(access_type != AccessType::RO, "cannot write read-only field");
+    //     using rhs_type = std::remove_reference_t<decltype(rhs)>;
+    //     static_assert(rhs_type::length <= msb - lsb, "larger field cannot be safely assigned to a narrower one");
+    //     return ros::detail::field_assignment_safe<field, rhs.value>{};
+    // }
 
-    constexpr auto operator= (auto && rhs) -> ros::detail::field_assignment_safe<field, decltype(rhs)::value> {
-        static_assert(access_type != AccessType::RO, "cannot write read-only field");
-        using rhs_type = std::remove_reference_t<decltype(rhs)>;
-        static_assert(rhs_type::length <= msb - lsb, "larger field cannot be safely assigned to a narrower one");
-        return ros::detail::field_assignment_safe<field, rhs.value>{};
-    }
+    // constexpr auto operator= (auto && rhs) -> ros::detail::field_assignment_safe<field, decltype(rhs)::value> {
+    //     static_assert(access_type != AccessType::RO, "cannot write read-only field");
+    //     using rhs_type = std::remove_reference_t<decltype(rhs)>;
+    //     static_assert(rhs_type::length <= msb - lsb, "larger field cannot be safely assigned to a narrower one");
+    //     return ros::detail::field_assignment_safe<field, rhs.value>{};
+    // }
 
     // [TODO] create concept
     template <typename T>
     requires (std::is_convertible_v<T, value_type> &&
-              std::numeric_limits<T>::digits >= msb - lsb)
+              std::numeric_limits<T>::digits >= msb - lsb) //&&
+    // requires {requires std::unsigned_integral<T>;}
     constexpr auto operator= (T const& rhs) -> ros::detail::field_assignment_safe_runtime<field> {
         static_assert(access_type != AccessType::RO, "cannot write read-only field");
         static_assert(std::numeric_limits<value_type>::digits >= std::numeric_limits<T>::digits, "Unsafe assignment. Assigned value type is too wide.");
@@ -238,8 +228,8 @@ struct field {
 
     template <typename T>
     requires (std::is_convertible_v<T, value_type> &&
-              std::numeric_limits<T>::digits >= msb - lsb)// &&
-    // requires {requires std::unsigned_integral<T>;} // issues warning if uncommented
+              std::numeric_limits<T>::digits >= msb - lsb) &&
+    requires {requires std::unsigned_integral<T>;} // issues warning if uncommented
     constexpr auto operator= (T && rhs) -> ros::detail::field_assignment_safe_runtime<field> {
         static_assert(access_type != AccessType::RO, "cannot write read-only field");
         static_assert(std::numeric_limits<value_type>::digits >= std::numeric_limits<T>::digits, "Unsafe assignment. Assigned value type is too wide.");
@@ -251,8 +241,8 @@ struct field {
             opt_rhs = std::unexpected(ros::error::ErrorType::InvalidValue);
         }
         // ask Mike about narrowing conversion from int to unsigned int warning
-        // return ros::detail::field_assignment_safe_runtime<field>{rhs};
-        return ros::detail::field_assignment_safe_runtime<field>(opt_rhs);
+        return ros::detail::field_assignment_safe_runtime<field>{opt_rhs};
+        // return ros::detail::field_assignment_safe_runtime<field>(opt_rhs);
     }
 
     static constexpr value_type update (value_type old_value, value_type new_value) {
@@ -589,6 +579,8 @@ T get_safe_runtime_value(T const& value) {
     return value;
 }
 
+// [TODO]: move dealing with error to the field assignment
+// [TODO]: convert function to template expression for better compiler transparency
 template <typename T>
 T get_safe_runtime_value(T const& value, auto write, auto ...writes) {
     if (!write.value) {
@@ -597,7 +589,7 @@ T get_safe_runtime_value(T const& value, auto write, auto ...writes) {
         // idea: provide user-defined way to report error: callback
         ros::error::callback(write.value.error());
         // std::cout << "Ignored assignment! Attempt to assign a value greater than the allowed field max." << std::endl;
-        return ros::error::handler<decltype(write)::type>() | get_safe_runtime_value<T>(value, writes...);
+        return /* ros::error::handler<decltype(write)::type>() | */ get_safe_runtime_value<T>(value, writes...);
     } else {
         return decltype(write)::type::to_reg(value, *write.value) | get_safe_runtime_value<T>(value, writes...);
     }
@@ -661,6 +653,8 @@ auto apply(Op op, Ops ...ops) -> return_reads_t<decltype(filter::tuple_filter<is
         return mask;
     }(safe_writes);
 
+    // [TODO]: move field type to a parent field_assignment struct
+    // [TODO]: squash compile-time and runtime mask calculation in one operation
     value_type runtime_write_mask = []<typename ...Ws>(std::tuple<Ws...> const& writes) -> value_type {
         value_type mask{0};
         if constexpr (sizeof ...(Ws) > 0) {
@@ -797,11 +791,11 @@ int main() {
     // multi-field read syntax
     // auto [f2, f3] = apply(r0.field2.read(),
     //                       r0.field3.read());
-    uint32_t t = 15;
+    uint32_t t = 17;
     // multi-field write/read syntax
     auto [f0, f1] = apply(r0.field0 = 0xf_f,
                           r0.field1 = 12_f,
-                          r0.field2 = t,
+                          r0.field2 = 15,
                           r0.field0.read(),
                           r0.field2.read());
 
