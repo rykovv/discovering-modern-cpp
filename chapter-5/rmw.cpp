@@ -216,10 +216,9 @@ struct field {
         static_assert(access_type != AccessType::RO, "cannot write read-only field");
         static_assert(std::numeric_limits<value_type>::digits >= std::numeric_limits<T>::digits, "Unsafe assignment. Assigned value type is too wide.");
 
-        // std::optional<value_type> opt_rhs;
-        std::expected<value_type, ros::error::ErrorType> opt_rhs;
+        value_type value;
         if (rhs <= mask >> lsb) {
-            opt_rhs = rhs;
+            value = rhs;
         } else {
             opt_rhs = std::unexpected(ros::error::ErrorType::InvalidValue);
         }
@@ -282,11 +281,10 @@ template <typename Field>
 struct field_assignment_safe_runtime : field_assignment<Field> {
     using value_type = typename Field::value_type;
 
-    constexpr field_assignment_safe_runtime(std::expected<value_type, ros::error::ErrorType> v)
+    constexpr field_assignment_safe_runtime(value_type v)
       : value{v} {}
 
-    // should it be static?
-    std::expected<value_type, ros::error::ErrorType> value;
+    value_type value;
 };
 
 template <typename Field>
@@ -296,7 +294,6 @@ struct field_assignment_unsafe : field_assignment<Field> {
     constexpr field_assignment_unsafe(value_type v)
       : value{v} {}
 
-    // should it be static?
     value_type value;
 };
 
