@@ -611,6 +611,21 @@ T get_safe_runtime_value(T const& value, auto write, auto ...writes) {
     }
 }
 
+template <typename T, typename Tuple, std::size_t... Idx>
+constexpr T get_write_value_helper(T value, Tuple tup, std::index_sequence<Idx...>) {
+    return (std::tuple_element_t<Idx, Tuple>::type::to_reg(value, std::get<Idx>(tup).value) | ...);
+}
+
+template <typename T, typename... Ts>
+constexpr T get_write_value(T value, std::tuple<Ts...> const& tup) {
+    return get_write_value_helper<T>(value, tup, std::make_index_sequence<sizeof...(Ts)>{});
+}
+
+template <typename T>
+constexpr T get_write_value(T value, std::tuple<> const& tup) {
+    return value;
+}
+
 template <typename T>
 T get_unsafe_runtime_value(T const& value) {
     return value;
@@ -673,23 +688,17 @@ auto apply(Op op, Ops ...ops) -> return_reads_t<decltype(filter::tuple_filter<is
             value = bus::template read<value_type>(Reg::address::value);
         }
 
-        value = std::apply(
-            [&value](auto ...writes) {
-                return (decltype(writes)::type::to_reg(value, writes.value) | ...);
-            }, safe_writes);
+        value = detail::get_write_value<value_type>(value, safe_writes);
 
         if constexpr (runtime_write_mask != 0) {
+            // value |= detail::get_write_value<value_type>(safe_runtime_writes);
             value |= std::apply(
                 [&value](auto ...writes) {
                     // return (decltype(writes)::type::to_reg(value, *writes.value) | ...);
                     return ros::detail::get_safe_runtime_value<value_type>(value, writes...);
                 }, safe_runtime_writes);
 
-            value |= std::apply(
-                [&value](auto ...writes) {
-                    // return (decltype(writes)::type::to_reg(value, *writes.value) | ...);
-                    return ros::detail::get_unsafe_runtime_value<value_type>(value, writes...);
-                }, unsafe_writes);
+            value = detail::get_write_value<value_type>(value, unsafe_writes);
         }
 
         bus::write(value, Reg::address::value);
@@ -791,7 +800,7 @@ int main() {
     uint32_t t = 17;
     // multi-field write/read syntax
     auto [f0, f1] = apply(r0.field0 = 0xf_f,
-                          r0.field1 = 12_f,
+                          r0.field1.unsafe = 13,
                           r0.field2 = 15,
                           r0.field0.read(),
                           r0.field2.read());
