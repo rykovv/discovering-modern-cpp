@@ -95,6 +95,7 @@ enum class AccessType {
 namespace detail {
 // forward declaration of operations
 // template <typename Reg, unsigned msb, unsigned lsb, AccessType AT, typename Reg::value_type val>
+template <typename Field>
 struct field_assignment;
 template <typename Field, typename Field::value_type val>
 struct field_assignment_safe;
@@ -268,16 +269,17 @@ struct field {
 
 namespace detail {
 // template <typename Reg, unsigned msb, unsigned lsb, AccessType AT, typename Reg::value_type val>
-struct field_assignment {};
-template <typename Field, typename Field::value_type val>
-struct field_assignment_safe : field_assignment {
+template <typename Field>
+struct field_assignment {
     using type = Field;
+};
+template <typename Field, typename Field::value_type val>
+struct field_assignment_safe : field_assignment<Field> {
     static constexpr typename Field::value_type value = val;
 };
 
 template <typename Field>
-struct field_assignment_safe_runtime : field_assignment {
-    using type = Field;
+struct field_assignment_safe_runtime : field_assignment<Field> {
     using value_type = typename Field::value_type;
 
     constexpr field_assignment_safe_runtime(std::expected<value_type, ros::error::ErrorType> v)
@@ -288,8 +290,7 @@ struct field_assignment_safe_runtime : field_assignment {
 };
 
 template <typename Field>
-struct field_assignment_unsafe : field_assignment {
-    using type = Field;
+struct field_assignment_unsafe : field_assignment<Field> {
     using value_type = typename Field::value_type;
 
     constexpr field_assignment_unsafe(value_type v)
@@ -653,7 +654,6 @@ auto apply(Op op, Ops ...ops) -> return_reads_t<decltype(filter::tuple_filter<is
         return mask;
     }(safe_writes);
 
-    // [TODO]: move field type to a parent field_assignment struct
     // [TODO]: squash compile-time and runtime mask calculation in one operation
     value_type runtime_write_mask = []<typename ...Ws>(std::tuple<Ws...> const& writes) -> value_type {
         value_type mask{0};
