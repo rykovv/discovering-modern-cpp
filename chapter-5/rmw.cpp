@@ -452,6 +452,21 @@ constexpr typename Reg::value_type get_rmw_mask (Reg const& r) {
     auto tup = reflect::to_tuple(r);
     return get_rwm_mask_helper(tup, std::make_integer_sequence<unsigned, reflect::MemberCounter<Reg>()>{});
 }
+
+template <typename Tuple, unsigned ...Idx>
+constexpr auto get_write_mask_helper (Tuple const& tup, std::integer_sequence<unsigned, Idx...>) {
+    return (std::tuple_element_t<Idx, Tuple>::type::mask | ...);
+};
+
+template <typename T>
+constexpr T get_write_mask (std::tuple<> const& tup) {
+    return 0;
+}
+
+template <typename T, typename... Ts>
+constexpr T get_write_mask (std::tuple<Ts...> const& tup) {
+    return get_write_mask_helper(tup, std::make_integer_sequence<unsigned, sizeof...(Ts)>{});
+}
 }
 
 namespace filter {
@@ -644,26 +659,8 @@ auto apply(Op op, Ops ...ops) -> return_reads_t<decltype(filter::tuple_filter<is
 
     auto runtime_writes = std::tuple_cat(safe_runtime_writes, unsafe_writes);
 
-    constexpr value_type write_mask = []<typename ...Ws>(std::tuple<Ws...> const& writes) -> value_type {
-        value_type mask{0};
-        if constexpr (sizeof ...(Ws) > 0) {
-            std::apply([&mask](auto ...ops) {
-                    mask = (decltype(ops)::type::mask | ...);
-                }, writes);
-        }
-        return mask;
-    }(safe_writes);
-
-    // [TODO]: squash compile-time and runtime mask calculation in one operation
-    value_type runtime_write_mask = []<typename ...Ws>(std::tuple<Ws...> const& writes) -> value_type {
-        value_type mask{0};
-        if constexpr (sizeof ...(Ws) > 0) {
-            std::apply([&mask](auto ...ops) {
-                    mask = (decltype(ops)::type::mask | ...);
-                }, writes);
-        }
-        return mask;
-    }(runtime_writes);
+    constexpr value_type write_mask = detail::get_write_mask<value_type>(safe_writes);
+    constexpr value_type runtime_write_mask = detail::get_write_mask<value_type>(runtime_writes);
 
     // std::cout << std::hex << runtime_write_mask << std::endl;
 
@@ -681,7 +678,7 @@ auto apply(Op op, Ops ...ops) -> return_reads_t<decltype(filter::tuple_filter<is
                 return (decltype(writes)::type::to_reg(value, writes.value) | ...);
             }, safe_writes);
 
-        if (runtime_write_mask != 0) {
+        if constexpr (runtime_write_mask != 0) {
             value |= std::apply(
                 [&value](auto ...writes) {
                     // return (decltype(writes)::type::to_reg(value, *writes.value) | ...);
@@ -696,7 +693,7 @@ auto apply(Op op, Ops ...ops) -> return_reads_t<decltype(filter::tuple_filter<is
         }
 
         bus::write(value, Reg::address::value);
-    } else if (runtime_write_mask != 0) { // only runtime writes
+    } else if constexpr (runtime_write_mask != 0) { // only runtime writes
         bool is_partial_write = (rmw_mask & runtime_write_mask != rmw_mask);
 
         if (is_partial_write) {
