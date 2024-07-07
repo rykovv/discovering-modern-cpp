@@ -121,43 +121,30 @@ struct unsafe_operations_handler {
 }
 
 namespace error {
-    enum class ErrorHandling {
-        Ignore,
-        Clamp
-    };
-    enum class ErrorType {
-        InvalidValue
-    };
-
-    using ErrorCallback = void(*)(ErrorType);
-    template <typename Field>
-    using ErrorHandler = typename Field::value_type(*)();
     
-    ErrorHandling handle = ErrorHandling::Ignore;
-    ErrorCallback callback = [](ErrorType e) -> void {
-        if (e == ErrorType::InvalidValue) {
-            std::cout << "Error occured: Invalid Value" << std::endl;
-        } else {
-            std::cout << "Error occured: Undefined" << std::endl;
-        }
-    };
+    template <typename Field, typename T = typename Field::value_type>
+    using ErrorHandler = typename Field::value_type(*)(T);
+    
+    // ErrorCallback callback = [](ErrorType e) -> void {
+    //     if (e == ErrorType::InvalidValue) {
+    //         std::cout << "Error occured: Invalid Value" << std::endl;
+    //     } else {
+    //         std::cout << "Error occured: Undefined" << std::endl;
+    //     }
+    // };
 
     template <typename Field, typename T = typename Field::value_type>
-    constexpr ErrorHandler<Field> ignoreHandler = []() -> T {
+    constexpr ErrorHandler<Field> ignoreHandler = [](T v) -> T {
+        std::cout << "ignore handler with " << v << std::endl;
         return T{0};
     };
     template <typename Field, typename T = typename Field::value_type>
-    constexpr ErrorHandler<Field> clampHandler = []() -> T {
-        return T{Field::mask >> Field::lsb};
+    constexpr ErrorHandler<Field> clampHandler = [](T v) -> T {
+        std::cout << "clamp handler with " << v << std::endl;
+        return T{((1 << Field::length::value) - 1)};
     };
     template <typename Field>
-    constexpr ErrorHandler<Field> handler = []() -> typename Field::value_type {
-        if (handle == ErrorHandling::Ignore) {
-            return ros::error::ignoreHandler<Field, typename Field::value_type>();
-        } else if (handle == ErrorHandling::Clamp) {
-            return ros::error::clampHandler<Field, typename Field::value_type>();
-        }
-    };
+    constexpr ErrorHandler<Field> handle = clampHandler<Field>;
 }
 
 template <typename Reg, unsigned msb, unsigned lsb, AccessType AT>
@@ -220,10 +207,10 @@ struct field {
         if (rhs <= mask >> lsb) {
             value = rhs;
         } else {
-            opt_rhs = std::unexpected(ros::error::ErrorType::InvalidValue);
+            value = ros::error::handle<field>(rhs);
         }
 
-        return ros::detail::field_assignment_safe_runtime<field>{opt_rhs};
+        return ros::detail::field_assignment_safe_runtime<field>{value};
     }
 
     template <typename T>
@@ -234,14 +221,14 @@ struct field {
         static_assert(access_type != AccessType::RO, "cannot write read-only field");
         static_assert(std::numeric_limits<value_type>::digits >= std::numeric_limits<T>::digits, "Unsafe assignment. Assigned value type is too wide.");
 
-        std::expected<value_type, ros::error::ErrorType> opt_rhs;
+        value_type value;
         if (rhs <= mask >> lsb) {
-            opt_rhs = rhs;
+            value = rhs;
         } else {
-            opt_rhs = std::unexpected(ros::error::ErrorType::InvalidValue);
+            value = ros::error::handle<field>(rhs);
         }
         // ask Mike about narrowing conversion from int to unsigned int warning
-        return ros::detail::field_assignment_safe_runtime<field>{opt_rhs};
+        return ros::detail::field_assignment_safe_runtime<field>{value};
         // return ros::detail::field_assignment_safe_runtime<field>(opt_rhs);
     }
 
@@ -600,11 +587,11 @@ T get_safe_runtime_value(T const& value, auto write, auto ...writes) {
         // [TODO] elaborate better error handling
         // idea: provide user-defined way to handle error: ignore, clamp
         // idea: provide user-defined way to report error: callback
-        ros::error::callback(write.value.error());
+        // ros::error::callback(write.value.error());
         // std::cout << "Ignored assignment! Attempt to assign a value greater than the allowed field max." << std::endl;
         return /* ros::error::handler<decltype(write)::type>() | */ get_safe_runtime_value<T>(value, writes...);
     } else {
-        return decltype(write)::type::to_reg(value, *write.value) | get_safe_runtime_value<T>(value, writes...);
+        return decltype(write)::type::to_reg(value, write.value) | get_safe_runtime_value<T>(value, writes...);
     }
 }
 
@@ -798,7 +785,7 @@ int main() {
     // multi-field write/read syntax
     auto [f0, f1] = apply(r0.field0 = 0xf_f,
                           r0.field1.unsafe = 13,
-                          r0.field2 = 15,
+                          r0.field2 = 23,
                           r0.field0.read(),
                           r0.field2.read());
 
