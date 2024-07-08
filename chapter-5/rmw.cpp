@@ -109,11 +109,13 @@ struct field_read;
 template <typename Field>
 struct unsafe_operations_handler {
     constexpr auto operator= (auto const& rhs) -> field_assignment_unsafe<Field> {
+        static_assert(Field::access_type != AccessType::RO, "cannot write read-only field");
         // narrowing conversion from int to unsigned int
         return ros::detail::field_assignment_unsafe<Field>(rhs);
     }
 
     constexpr auto operator= (auto && rhs) -> field_assignment_unsafe<Field> {
+        static_assert(Field::access_type != AccessType::RO, "cannot write read-only field");
         // narrowing conversion from int to unsigned int
         return field_assignment_unsafe<Field>(rhs);
     }
@@ -124,14 +126,6 @@ namespace error {
     
     template <typename Field, typename T = typename Field::value_type>
     using ErrorHandler = typename Field::value_type(*)(T);
-    
-    // ErrorCallback callback = [](ErrorType e) -> void {
-    //     if (e == ErrorType::InvalidValue) {
-    //         std::cout << "Error occured: Invalid Value" << std::endl;
-    //     } else {
-    //         std::cout << "Error occured: Undefined" << std::endl;
-    //     }
-    // };
 
     template <typename Field, typename T = typename Field::value_type>
     constexpr ErrorHandler<Field> ignoreHandler = [](T v) -> T {
@@ -579,22 +573,6 @@ T get_safe_runtime_value(T const& value) {
     return value;
 }
 
-// [TODO]: move dealing with error to the field assignment
-// [TODO]: convert function to template expression for better compiler transparency
-template <typename T>
-T get_safe_runtime_value(T const& value, auto write, auto ...writes) {
-    if (!write.value) {
-        // [TODO] elaborate better error handling
-        // idea: provide user-defined way to handle error: ignore, clamp
-        // idea: provide user-defined way to report error: callback
-        // ros::error::callback(write.value.error());
-        // std::cout << "Ignored assignment! Attempt to assign a value greater than the allowed field max." << std::endl;
-        return /* ros::error::handler<decltype(write)::type>() | */ get_safe_runtime_value<T>(value, writes...);
-    } else {
-        return decltype(write)::type::to_reg(value, write.value) | get_safe_runtime_value<T>(value, writes...);
-    }
-}
-
 template <typename T, typename Tuple, std::size_t... Idx>
 constexpr T get_write_value_helper(T value, Tuple tup, std::index_sequence<Idx...>) {
     return (std::tuple_element_t<Idx, Tuple>::type::to_reg(value, std::get<Idx>(tup).value) | ...);
@@ -658,51 +636,24 @@ auto apply(Op op, Ops ...ops) -> return_reads_t<decltype(filter::tuple_filter<is
 
     auto runtime_writes = std::tuple_cat(safe_runtime_writes, unsafe_writes);
 
-    constexpr value_type write_mask = detail::get_write_mask<value_type>(safe_writes);
+    constexpr value_type comptime_write_mask = detail::get_write_mask<value_type>(safe_writes);
     constexpr value_type runtime_write_mask = detail::get_write_mask<value_type>(runtime_writes);
-
-    // std::cout << std::hex << runtime_write_mask << std::endl;
+    constexpr value_type write_mask = comptime_write_mask | runtime_write_mask;
 
     constexpr value_type rmw_mask = detail::get_rmw_mask(Reg{});
 
-    if constexpr (write_mask != 0) { // mix of runtime and compile-time
+    if constexpr (write_mask != 0) {
         constexpr bool is_partial_write = (rmw_mask & write_mask != rmw_mask);
 
         if constexpr (is_partial_write) {
             value = bus::template read<value_type>(Reg::address::value);
         }
 
+        // [TODO] study efficiency of bundling together all writes
+        // compile time
         value = detail::get_write_value<value_type>(value, safe_writes);
-
-        if constexpr (runtime_write_mask != 0) {
-            // value |= detail::get_write_value<value_type>(safe_runtime_writes);
-            value |= std::apply(
-                [&value](auto ...writes) {
-                    // return (decltype(writes)::type::to_reg(value, *writes.value) | ...);
-                    return ros::detail::get_safe_runtime_value<value_type>(value, writes...);
-                }, safe_runtime_writes);
-
-            value = detail::get_write_value<value_type>(value, unsafe_writes);
-        }
-
-        bus::write(value, Reg::address::value);
-    } else if constexpr (runtime_write_mask != 0) { // only runtime writes
-        bool is_partial_write = (rmw_mask & runtime_write_mask != rmw_mask);
-
-        if (is_partial_write) {
-            value = bus::template read<value_type>(Reg::address::value);
-        }
-
-        value = std::apply(
-            [&value](auto ...writes) {
-                // return (decltype(writes)::type::to_reg(value, *writes.value) | ...);
-                return ros::detail::get_safe_runtime_value<value_type>(value, writes...);
-            }, safe_runtime_writes);
-
-        value |= std::apply(
-            [&value](auto ...writes) {
-                return ros::detail::get_unsafe_runtime_value<value_type>(value, writes...);
-            }, unsafe_writes);
+        // runtime
+        value = detail::get_write_value<value_type>(value, runtime_writes);
 
         bus::write(value, Reg::address::value);
     } else /* if (return_reads) */ {
@@ -785,23 +736,20 @@ int main() {
     // multi-field write/read syntax
     auto [f0, f1] = apply(r0.field0 = 0xf_f,
                           r0.field1.unsafe = 13,
-                          r0.field2 = 23,
+                          r0.field2 = t,
                           r0.field0.read(),
                           r0.field2.read());
 
-    // apply(r0.field2 = 13);
+    // apply(r0.field0 = 13,
+    //       r0.field1 = 13,
+    //       r0.field2.unsafe = 2);
 
-    // std::cout << typeid(decltype(apply(r0.field0 = 0xf_f,
-    //     r0.field1 = 12_f,
-    //     r0.field2 = {2},
-    //     r0.field0.read(),
-    //     r0.field1.read()))).name() << std::endl;
 
     // std::cout << std::hex << f0 << std::endl;
     // std::cout << std::hex << f1 << std::endl;
 
     // unsafe writes
-    // uint64_t foo = 0x10;
+    // uint64_t foo = 0x10; // ignored
     // apply(r0.field0.unsafe = 0x1,
     //       r0.field1.unsafe = foo);
 
