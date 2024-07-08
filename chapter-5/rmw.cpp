@@ -738,7 +738,30 @@ int main() {
                           r0.field1.unsafe = 13,
                           r0.field2 = t,
                           r0.field0.read(),
-                          r0.field2.read());
+                          r0.field2.read()
+                        //   // self-referenced rmw
+                        //   r0.field1([](auto f1){
+                        //     return f1 & 0x3;
+                        //   }),
+                        //   // multi-referenced rmw
+                        //   r0.field2([](auto f0, auto f1, auto f2) {
+                        //         return f0 + f1 + f2;
+                        //     }, 
+                        //     r0.field0, r0.field1, r0.field2
+                        //   )
+                          );
+
+    // lambda-based rmw
+    // apply(
+    //     // self-referenced rmw
+    //     r0.field1([](auto f1){
+    //         return f1 & 0x3;
+    //     }),
+    //     // multi-referenced rmw
+    //     r0.field2([](auto f0, auto f1, auto f2) {
+    //         return f0 + f1 + f2;
+    //     }, 
+    //     r0.field0, r0.field1, r0.field2));
 
     // apply(r0.field0 = 13,
     //       r0.field1 = 13,
