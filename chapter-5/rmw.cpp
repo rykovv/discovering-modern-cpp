@@ -103,6 +103,8 @@ template <typename Field>
 struct field_assignment_safe_runtime;
 template <typename Field>
 struct field_assignment_unsafe;
+template <typename F, typename Field>
+struct field_assignment_invocable;
 template <typename Field>
 struct field_read;
 
@@ -191,8 +193,8 @@ struct field {
     // [TODO] create concept
     template <typename T>
     requires (std::is_convertible_v<T, value_type> &&
-              std::numeric_limits<T>::digits >= msb - lsb) //&&
-    // requires {requires std::unsigned_integral<T>;}
+              std::numeric_limits<T>::digits >= msb - lsb) &&
+    requires {requires std::unsigned_integral<T>;}
     constexpr auto operator= (T const& rhs) -> ros::detail::field_assignment_safe_runtime<field> {
         static_assert(access_type != AccessType::RO, "cannot write read-only field");
         static_assert(std::numeric_limits<value_type>::digits >= std::numeric_limits<T>::digits, "Unsafe assignment. Assigned value type is too wide.");
@@ -210,7 +212,7 @@ struct field {
     template <typename T>
     requires (std::is_convertible_v<T, value_type> &&
               std::numeric_limits<T>::digits >= msb - lsb) &&
-    requires {requires std::unsigned_integral<T>;} // issues warning if uncommented
+    requires {requires std::unsigned_integral<T>;}
     constexpr auto operator= (T && rhs) -> ros::detail::field_assignment_safe_runtime<field> {
         static_assert(access_type != AccessType::RO, "cannot write read-only field");
         static_assert(std::numeric_limits<value_type>::digits >= std::numeric_limits<T>::digits, "Unsafe assignment. Assigned value type is too wide.");
@@ -221,9 +223,18 @@ struct field {
         } else {
             value = ros::error::handle<field>(rhs);
         }
-        // ask Mike about narrowing conversion from int to unsigned int warning
+        
         return ros::detail::field_assignment_safe_runtime<field>{value};
-        // return ros::detail::field_assignment_safe_runtime<field>(opt_rhs);
+    }
+
+    template <std::invocable F>
+    constexpr auto operator() (F const& f) -> ros::detail::field_assignment_invocable<F, field> {
+        
+    }
+
+    template <std::invocable F>
+    constexpr auto operator() (F && f) -> ros::detail::field_assignment_invocable<F, field> {
+        
     }
 
     static constexpr value_type update (value_type old_value, value_type new_value) {
@@ -231,8 +242,6 @@ struct field {
     }
 
     static constexpr value_type to_reg (value_type reg_value, value_type value) {
-        // [TODO] check correctness
-        // static_assert(value <= (mask >> lsb), "larger field cannot be safely assigned to a narrower one");
         return (reg_value & ~mask) | (value << lsb) & mask;
     }
 
@@ -276,6 +285,17 @@ struct field_assignment_unsafe : field_assignment<Field> {
       : value{v} {}
 
     value_type value;
+};
+
+template <typename F, typename Field>
+struct field_assignment_invocable {
+    using type = Field;
+    
+    field_assignment_invocable(F f)
+      : lambda_{f}
+    {}
+
+    F lambda_;
 };
 
 template <typename Field>
@@ -738,18 +758,7 @@ int main() {
                           r0.field1.unsafe = 13,
                           r0.field2 = t,
                           r0.field0.read(),
-                          r0.field2.read()
-                        //   // self-referenced rmw
-                        //   r0.field1([](auto f1){
-                        //     return f1 & 0x3;
-                        //   }),
-                        //   // multi-referenced rmw
-                        //   r0.field2([](auto f0, auto f1, auto f2) {
-                        //         return f0 + f1 + f2;
-                        //     }, 
-                        //     r0.field0, r0.field1, r0.field2
-                        //   )
-                          );
+                          r0.field2.read());
 
     // lambda-based rmw
     // apply(
