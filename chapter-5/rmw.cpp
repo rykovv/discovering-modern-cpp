@@ -227,14 +227,12 @@ struct field {
         return ros::detail::field_assignment_safe_runtime<field>{value};
     }
 
-    template <std::invocable F>
-    constexpr auto operator() (F const& f) -> ros::detail::field_assignment_invocable<F, field> {
-        
+    constexpr auto read() const -> ros::detail::field_read<field> {
+        return ros::detail::field_read<field>{};
     }
 
-    template <std::invocable F>
-    constexpr auto operator() (F && f) -> ros::detail::field_assignment_invocable<F, field> {
-        
+    constexpr auto operator() (std::invocable<value_type> auto f) -> ros::detail::field_assignment_invocable<decltype(f), field> {
+        return ros::detail::field_assignment_invocable<decltype(f), field>{f};
     }
 
     static constexpr value_type update (value_type old_value, value_type new_value) {
@@ -249,8 +247,15 @@ struct field {
         return (value & mask) >> lsb;
     }
 
-    constexpr auto read() const -> ros::detail::field_read<field> {
-        return ros::detail::field_read<field>{};
+    static constexpr value_type check (value_type value) {
+        value_type safe_val;
+        if (value <= mask >> lsb) {
+            safe_val = value;
+        } else {
+            safe_val = ros::error::handle<field>(value);
+        }
+
+        return safe_val;
     }
 
     ros::detail::unsafe_operations_handler<field> unsafe;
@@ -294,6 +299,10 @@ struct field_assignment_invocable {
     field_assignment_invocable(F f)
       : lambda_{f}
     {}
+
+    constexpr auto operator() (auto ...args) {
+        return lambda_(args...);
+    }
 
     F lambda_;
 };
@@ -573,6 +582,13 @@ struct is_field_assignment_unsafe<ros::detail::field_assignment_unsafe<Field>> {
     static constexpr bool value = true;
 };
 
+template <typename>
+struct is_field_assignment_invocable : std::false_type {};
+
+template <typename F, typename Field>
+struct is_field_assignment_invocable<ros::detail::field_assignment_invocable<F, Field>> : std::true_type {};
+
+
 template <typename T>
 struct return_reads {
     using type = void;
@@ -588,11 +604,6 @@ using return_reads_t = typename return_reads<Ts...>::type;
 
 
 namespace detail {
-template <typename T>
-T get_safe_runtime_value(T const& value) {
-    return value;
-}
-
 template <typename T, typename Tuple, std::size_t... Idx>
 constexpr T get_write_value_helper(T value, Tuple tup, std::index_sequence<Idx...>) {
     return (std::tuple_element_t<Idx, Tuple>::type::to_reg(value, std::get<Idx>(tup).value) | ...);
@@ -608,14 +619,24 @@ constexpr T get_write_value(T value, std::tuple<> const& tup) {
     return value;
 }
 
-template <typename T>
-T get_unsafe_runtime_value(T const& value) {
-    return value;
+template <typename T, typename Tuple, std::size_t... Idx>
+constexpr T get_invocable_write_value_helper(T value, Tuple tup, std::index_sequence<Idx...>) {
+    // get field value from reg -> evaluate invocable -> send back to reg value 
+    return (std::tuple_element_t<Idx, Tuple>::type::to_reg(value, 
+        std::tuple_element_t<Idx, Tuple>::type::check(
+            std::get<Idx>(tup)(std::tuple_element_t<Idx, Tuple>::type::to_field(value))
+            )) 
+        | ...);
+}
+
+template <typename T, typename... Ts>
+constexpr T get_invocable_write_value(T value, std::tuple<Ts...> const& tup) {
+    return get_invocable_write_value_helper<T>(value, tup, std::make_index_sequence<sizeof...(Ts)>{});
 }
 
 template <typename T>
-T get_unsafe_runtime_value(T const& value, auto write, auto ...writes) {
-    return decltype(write)::type::to_reg(value, write.value) | get_unsafe_runtime_value<T>(value, writes...);
+constexpr T get_invocable_write_value(T value, std::tuple<> const& tup) {
+    return value;
 }
 }
 
@@ -624,8 +645,8 @@ T get_unsafe_runtime_value(T const& value, auto write, auto ...writes) {
 template<typename ...Fields>
 void apply(Fields ...fields);
 
-// template<>
-// void apply() {};
+template<>
+void apply() {};
 
 template<typename Op, typename ...Ops>
 concept Applicable = (
@@ -656,19 +677,24 @@ auto apply(Op op, Ops ...ops) -> return_reads_t<decltype(filter::tuple_filter<is
 
     auto runtime_writes = std::tuple_cat(safe_runtime_writes, unsafe_writes);
 
+    auto invocable_writes = filter::tuple_filter<is_field_assignment_invocable>(std::make_tuple(op, ops...));
+
     constexpr value_type comptime_write_mask = detail::get_write_mask<value_type>(safe_writes);
     constexpr value_type runtime_write_mask = detail::get_write_mask<value_type>(runtime_writes);
-    constexpr value_type write_mask = comptime_write_mask | runtime_write_mask;
+    constexpr value_type invocable_write_mask = detail::get_write_mask<value_type>(invocable_writes);
+    constexpr value_type write_mask = comptime_write_mask | runtime_write_mask | invocable_write_mask;
 
     constexpr value_type rmw_mask = detail::get_rmw_mask(Reg{});
 
     if constexpr (write_mask != 0) {
         constexpr bool is_partial_write = (rmw_mask & write_mask != rmw_mask);
+        constexpr bool has_invocable_writes = std::tuple_size_v<decltype(invocable_writes)> > 0;
 
-        if constexpr (is_partial_write) {
+        if constexpr (is_partial_write || has_invocable_writes) {
             value = bus::template read<value_type>(Reg::address::value);
         }
 
+        value = detail::get_invocable_write_value<value_type>(value, invocable_writes);
         // [TODO] study efficiency of bundling together all writes
         // compile time
         value = detail::get_write_value<value_type>(value, safe_writes);
@@ -754,23 +780,28 @@ int main() {
     //                       r0.field3.read());
     uint32_t t = 17;
     // multi-field write/read syntax
-    auto [f0, f1] = apply(r0.field0 = 0xf_f,
-                          r0.field1.unsafe = 13,
-                          r0.field2 = t,
-                          r0.field0.read(),
-                          r0.field2.read());
+    // auto [f0, f1] = apply(r0.field0 = 0xf_f,
+    //                       r0.field1.unsafe = 13,
+    //                       r0.field2 = t,
+    //                       r0.field0.read(),
+    //                       r0.field2.read());
 
-    // lambda-based rmw
-    // apply(
-    //     // self-referenced rmw
-    //     r0.field1([](auto f1){
+    // r0.field1([](auto f1){
     //         return f1 & 0x3;
-    //     }),
+    //     });
+    // lambda-based rmw
+    apply(
+    //     // self-referenced rmw
+        r0.field1([&t](auto f1){
+            // std::cout << "field " << f1 << std::endl;
+            return t;
+        })
     //     // multi-referenced rmw
     //     r0.field2([](auto f0, auto f1, auto f2) {
     //         return f0 + f1 + f2;
     //     }, 
-    //     r0.field0, r0.field1, r0.field2));
+    //     r0.field0, r0.field1, r0.field2)
+    );
 
     // apply(r0.field0 = 13,
     //       r0.field1 = 13,
@@ -810,7 +841,7 @@ int main() {
 
     // single-field read syntax
     uint8_t v;
-    v <= r0.field3;
+    // v <= r0.field3;
     
     // return v;
     return v;
