@@ -24,7 +24,7 @@ concept FieldSelectable = requires {
 namespace detail {
 
 template <char Char>
-constexpr bool is_decimal_digit_v = Char - '0' >= 0 && Char - '0' <= 9;
+constexpr bool is_decimal_digit_v = Char >= '0' && Char <= '9';
 
 template <char ...Chars>
 concept DecimalNumber = (is_decimal_digit_v<Chars> && ...);
@@ -56,7 +56,7 @@ constexpr bool is_0_v = Char == '0';
 template <char Char>
 struct is_hex_char {
     static constexpr bool value = ros::detail::is_decimal_digit_v<Char> || 
-    (Char - 'A' >= 0 && Char - 'F' < 6 || Char - 'a' >= 0 && Char - 'f' < 6);
+    (Char >= 'A' && Char <= 'F' || Char >= 'a' && Char <= 'f');
 };
 template <char Char>
 constexpr bool is_hex_char_v = ros::detail::is_hex_char<Char>::value;
@@ -76,7 +76,7 @@ requires HexadecimalNumber<Char0, Char1, Chars...>
         T sum = 0;
 
         for (char c : chars) {
-            T const digit = c - '0' > 9? c >= 'a'? c - 'a' + 10 : c - 'A' + 10 : c - '0';
+            T const digit = c > '9' ? c >= 'a' ? c - 'a' + 10 : c - 'A' + 10 : c - '0';
             sum = (sum * 16) + digit;
         }
 
@@ -103,7 +103,7 @@ template <typename Field>
 struct field_assignment_safe_runtime;
 template <typename Field>
 struct field_assignment_unsafe;
-template <typename F, typename Field>
+template <typename F, typename Field, typename... Fields>
 struct field_assignment_invocable;
 template <typename Field>
 struct field_read;
@@ -231,8 +231,14 @@ struct field {
         return ros::detail::field_read<field>{};
     }
 
-    constexpr auto operator() (std::invocable<value_type> auto f) -> ros::detail::field_assignment_invocable<decltype(f), field> {
-        return ros::detail::field_assignment_invocable<decltype(f), field>{f};
+    constexpr auto operator() (std::invocable<value_type> auto f) -> ros::detail::field_assignment_invocable<decltype(f), field, field> {
+        return ros::detail::field_assignment_invocable<decltype(f), field, field>{f};
+    }
+
+    template <typename F, typename Field0, typename... Fields>
+    requires std::invocable<F, typename Field0::value_type, typename Fields::value_type...>
+    constexpr auto operator() (F f, Field0 f0, Fields... fs) -> ros::detail::field_assignment_invocable<F, field, Field0, Fields...> {
+        return ros::detail::field_assignment_invocable<F, field, Field0, Fields...>{f};
     }
 
     static constexpr value_type update (value_type old_value, value_type new_value) {
@@ -292,16 +298,16 @@ struct field_assignment_unsafe : field_assignment<Field> {
     value_type value;
 };
 
-template <typename F, typename Field>
-struct field_assignment_invocable {
-    using type = Field;
+template <typename F, typename FieldOp, typename Field0, typename... Fields>
+struct field_assignment_invocable<F, FieldOp, Field0, Fields...> : field_assignment<FieldOp> {
+    using fields = std::tuple<Field0, Fields...>;
     
     field_assignment_invocable(F f)
       : lambda_{f}
     {}
 
-    constexpr auto operator() (auto ...args) {
-        return lambda_(args...);
+    constexpr auto operator() (typename Field0::value_type f0, typename Fields::value_type ...fs) -> typename FieldOp::value_type {
+        return lambda_(f0, fs...);
     }
 
     F lambda_;
@@ -582,11 +588,11 @@ struct is_field_assignment_unsafe<ros::detail::field_assignment_unsafe<Field>> {
     static constexpr bool value = true;
 };
 
-template <typename>
+template <typename...>
 struct is_field_assignment_invocable : std::false_type {};
 
-template <typename F, typename Field>
-struct is_field_assignment_invocable<ros::detail::field_assignment_invocable<F, Field>> : std::true_type {};
+template <typename F, typename... Fields>
+struct is_field_assignment_invocable<ros::detail::field_assignment_invocable<F, Fields...>> : std::true_type {};
 
 
 template <typename T>
@@ -627,6 +633,53 @@ constexpr T get_invocable_write_value_helper(T value, Tuple tup, std::index_sequ
             std::get<Idx>(tup)(std::tuple_element_t<Idx, Tuple>::type::to_field(value))
             )) 
         | ...);
+}
+
+template <typename T, typename InvocableWrite, typename TupleFields, std::size_t... Idx>
+constexpr T get_invocables_write_fields_helper(T value, InvocableWrite iw, TupleFields tup, std::index_sequence<Idx...>) {
+    // get each field
+    return iw(std::tuple_element_t<Idx, TupleFields>::to_field(value)...);
+}
+
+template <typename T, typename TupleInvocableWrites, std::size_t... Idx>
+constexpr T get_invocables_write_value_helper(T value, TupleInvocableWrites tup, std::index_sequence<Idx...>) {
+    // ((std::cout << std::tuple_element_t<Idx, TupleInvocableWrites>::type::to_reg( // wrap back everything to reg value
+    //     T{0}, // pass in zero, final value will assigned with a compound mask
+    //     std::tuple_element_t<Idx, TupleInvocableWrites>::type::check( // safety check
+    //         get_invocables_write_fields_helper( // make invocable call with each field value
+    //             value, // original reg value
+    //             std::get<Idx>(tup), // invocable lambda wrapper
+    //             typename std::tuple_element_t<Idx, TupleInvocableWrites>::fields{}, // tuple of fields
+    //             std::make_index_sequence<
+    //                 std::tuple_size_v<
+    //                     typename std::tuple_element_t<Idx, TupleInvocableWrites>::fields
+    //                     >
+    //                 >{}
+    //             )
+    //         )) 
+    //     << " "), ...);
+    // return T{0};
+    return (std::tuple_element_t<Idx, TupleInvocableWrites>::type::to_reg( // wrap back everything to reg value
+        T{0}, // pass in zero, final value will assigned with a compound mask
+        std::tuple_element_t<Idx, TupleInvocableWrites>::type::check( // safety check
+            get_invocables_write_fields_helper( // make invocable call with each field value
+                value, // original reg value
+                std::get<Idx>(tup), // invocable lambda wrapper
+                typename std::tuple_element_t<Idx, TupleInvocableWrites>::fields{}, // tuple of fields
+                std::make_index_sequence<
+                    std::tuple_size_v<
+                        typename std::tuple_element_t<Idx, TupleInvocableWrites>::fields
+                        >
+                    >{}
+                )
+            )) 
+        | ...);
+}
+
+template <typename T, typename... InvocableWrites>
+constexpr T get_invocables_write_value(T value, std::tuple<InvocableWrites...> const& tup, T invocable_write_mask) {
+    return (value & ~invocable_write_mask) | 
+            get_invocables_write_value_helper(value, tup, std::make_index_sequence<sizeof...(InvocableWrites)>{});
 }
 
 template <typename T, typename... Ts>
@@ -690,16 +743,18 @@ auto apply(Op op, Ops ...ops) -> return_reads_t<decltype(filter::tuple_filter<is
         constexpr bool is_partial_write = (rmw_mask & write_mask != rmw_mask);
         constexpr bool has_invocable_writes = std::tuple_size_v<decltype(invocable_writes)> > 0;
 
-        if constexpr (is_partial_write || has_invocable_writes) {
+        if constexpr (is_partial_write) {
             value = bus::template read<value_type>(Reg::address::value);
         }
 
-        value = detail::get_invocable_write_value<value_type>(value, invocable_writes);
         // [TODO] study efficiency of bundling together all writes
         // compile time
-        value = detail::get_write_value<value_type>(value, safe_writes);
+        value = detail::get_write_value(value, safe_writes);
         // runtime
-        value = detail::get_write_value<value_type>(value, runtime_writes);
+        value = detail::get_write_value(value, runtime_writes);
+
+        // evaluate invocables at the end
+        value = detail::get_invocables_write_value(value, invocable_writes, invocable_write_mask);
 
         bus::write(value, Reg::address::value);
     } else /* if (return_reads) */ {
@@ -749,7 +804,7 @@ struct mmio_bus : ros::bus {
     template <typename T, typename Addr>
     static constexpr T read(Addr address) {
         std::cout << "mmio read called on addr " << std::hex << address << std::endl;
-        return T{0x0};
+        return T{0xfff30201};
     }
     template <typename T, typename Addr>
     static constexpr void write(T val, Addr address) {
@@ -764,12 +819,10 @@ struct my_reg : ros::reg<my_reg, uint32_t, mmio_bus, 0x2000> {
     ros::field<my_reg, 12, 8, ros::AccessType::RW> field1;
     ros::field<my_reg, 20, 16, ros::AccessType::RW> field2;
     ros::field<my_reg, 31, 28, ros::AccessType::RO> field3;
-};
+} r0;
 
 
 int main() {
-
-    my_reg r0;
 
     // multi-field write syntax
     // apply(r0.field0 = 0xf_f,
@@ -791,16 +844,17 @@ int main() {
     //     });
     // lambda-based rmw
     apply(
-    //     // self-referenced rmw
-        r0.field1([&t](auto f1){
-            // std::cout << "field " << f1 << std::endl;
-            return t;
-        })
-    //     // multi-referenced rmw
-    //     r0.field2([](auto f0, auto f1, auto f2) {
-    //         return f0 + f1 + f2;
-    //     }, 
-    //     r0.field0, r0.field1, r0.field2)
+        // self-referenced rmw
+        r0.field1([](auto f1){
+            std::cout << "self-ref field1 " << f1 << std::endl;
+            return f1 | 0x8;
+        }),
+        // multi-referenced rmw
+        r0.field2([](auto f0, auto f1, auto f2) {
+            std::cout << "mult-ref field0 " << f0 << " field1 " << f1 << " field2 " << f2 << std::endl;
+            return f0 + f1 + f2;
+        }, 
+        r0.field0, r0.field1, r0.field2)
     );
 
     // apply(r0.field0 = 13,
