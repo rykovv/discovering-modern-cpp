@@ -611,58 +611,33 @@ using return_reads_t = typename return_reads<Ts...>::type;
 
 namespace detail {
 template <typename T, typename Tuple, std::size_t... Idx>
-constexpr T get_write_value_helper(T value, Tuple tup, std::index_sequence<Idx...>) {
-    return (std::tuple_element_t<Idx, Tuple>::type::to_reg(value, std::get<Idx>(tup).value) | ...);
+constexpr T get_write_value_helper(Tuple tup, std::index_sequence<Idx...>) {
+    return (std::tuple_element_t<Idx, Tuple>::type::to_reg(T{0}, std::get<Idx>(tup).value) | ...);
 }
 
 template <typename T, typename... Ts>
-constexpr T get_write_value(T value, std::tuple<Ts...> const& tup) {
-    return get_write_value_helper<T>(value, tup, std::make_index_sequence<sizeof...(Ts)>{});
+constexpr T get_write_value(T value, T mask, std::tuple<Ts...> const& tup) {
+    return (value & ~mask) | 
+            get_write_value_helper<T>(tup, std::make_index_sequence<sizeof...(Ts)>{});
 }
 
 template <typename T>
-constexpr T get_write_value(T value, std::tuple<> const& tup) {
+constexpr T get_write_value(T value, T mask, std::tuple<> const& tup) {
     return value;
 }
 
-template <typename T, typename Tuple, std::size_t... Idx>
-constexpr T get_invocable_write_value_helper(T value, Tuple tup, std::index_sequence<Idx...>) {
-    // get field value from reg -> evaluate invocable -> send back to reg value 
-    return (std::tuple_element_t<Idx, Tuple>::type::to_reg(value, 
-        std::tuple_element_t<Idx, Tuple>::type::check(
-            std::get<Idx>(tup)(std::tuple_element_t<Idx, Tuple>::type::to_field(value))
-            )) 
-        | ...);
-}
-
 template <typename T, typename InvocableWrite, typename TupleFields, std::size_t... Idx>
-constexpr T get_invocables_write_fields_helper(T value, InvocableWrite iw, TupleFields tup, std::index_sequence<Idx...>) {
+constexpr T get_invocable_write_fields_helper(T value, InvocableWrite iw, TupleFields tup, std::index_sequence<Idx...>) {
     // get each field
     return iw(std::tuple_element_t<Idx, TupleFields>::to_field(value)...);
 }
 
 template <typename T, typename TupleInvocableWrites, std::size_t... Idx>
-constexpr T get_invocables_write_value_helper(T value, TupleInvocableWrites tup, std::index_sequence<Idx...>) {
-    // ((std::cout << std::tuple_element_t<Idx, TupleInvocableWrites>::type::to_reg( // wrap back everything to reg value
-    //     T{0}, // pass in zero, final value will assigned with a compound mask
-    //     std::tuple_element_t<Idx, TupleInvocableWrites>::type::check( // safety check
-    //         get_invocables_write_fields_helper( // make invocable call with each field value
-    //             value, // original reg value
-    //             std::get<Idx>(tup), // invocable lambda wrapper
-    //             typename std::tuple_element_t<Idx, TupleInvocableWrites>::fields{}, // tuple of fields
-    //             std::make_index_sequence<
-    //                 std::tuple_size_v<
-    //                     typename std::tuple_element_t<Idx, TupleInvocableWrites>::fields
-    //                     >
-    //                 >{}
-    //             )
-    //         )) 
-    //     << " "), ...);
-    // return T{0};
+constexpr T get_invocable_write_value_helper(T value, TupleInvocableWrites tup, std::index_sequence<Idx...>) {
     return (std::tuple_element_t<Idx, TupleInvocableWrites>::type::to_reg( // wrap back everything to reg value
         T{0}, // pass in zero, final value will assigned with a compound mask
         std::tuple_element_t<Idx, TupleInvocableWrites>::type::check( // safety check
-            get_invocables_write_fields_helper( // make invocable call with each field value
+            get_invocable_write_fields_helper( // make invocable call with each field value
                 value, // original reg value
                 std::get<Idx>(tup), // invocable lambda wrapper
                 typename std::tuple_element_t<Idx, TupleInvocableWrites>::fields{}, // tuple of fields
@@ -677,18 +652,13 @@ constexpr T get_invocables_write_value_helper(T value, TupleInvocableWrites tup,
 }
 
 template <typename T, typename... InvocableWrites>
-constexpr T get_invocables_write_value(T value, std::tuple<InvocableWrites...> const& tup, T invocable_write_mask) {
-    return (value & ~invocable_write_mask) | 
-            get_invocables_write_value_helper(value, tup, std::make_index_sequence<sizeof...(InvocableWrites)>{});
-}
-
-template <typename T, typename... Ts>
-constexpr T get_invocable_write_value(T value, std::tuple<Ts...> const& tup) {
-    return get_invocable_write_value_helper<T>(value, tup, std::make_index_sequence<sizeof...(Ts)>{});
+constexpr T get_invocable_write_value(T value, T mask, std::tuple<InvocableWrites...> const& tup) {
+    return (value & ~mask) | 
+            get_invocable_write_value_helper(value, tup, std::make_index_sequence<sizeof...(InvocableWrites)>{});
 }
 
 template <typename T>
-constexpr T get_invocable_write_value(T value, std::tuple<> const& tup) {
+constexpr T get_invocable_write_value(T value, T mask, std::tuple<> const& tup) {
     return value;
 }
 }
@@ -749,12 +719,12 @@ auto apply(Op op, Ops ...ops) -> return_reads_t<decltype(filter::tuple_filter<is
 
         // [TODO] study efficiency of bundling together all writes
         // compile time
-        value = detail::get_write_value(value, safe_writes);
+        value = detail::get_write_value(value, comptime_write_mask, safe_writes);
         // runtime
-        value = detail::get_write_value(value, runtime_writes);
+        value = detail::get_write_value(value, runtime_write_mask, runtime_writes);
 
         // evaluate invocables at the end
-        value = detail::get_invocables_write_value(value, invocable_writes, invocable_write_mask);
+        value = detail::get_invocable_write_value(value, invocable_write_mask, invocable_writes);
 
         bus::write(value, Reg::address::value);
     } else /* if (return_reads) */ {
@@ -833,11 +803,11 @@ int main() {
     //                       r0.field3.read());
     uint32_t t = 17;
     // multi-field write/read syntax
-    // auto [f0, f1] = apply(r0.field0 = 0xf_f,
-    //                       r0.field1.unsafe = 13,
-    //                       r0.field2 = t,
-    //                       r0.field0.read(),
-    //                       r0.field2.read());
+    auto [f0, f1] = apply(r0.field0 = 0xf_f,
+                          r0.field1.unsafe = 13,
+                          r0.field2 = t,
+                          r0.field0.read(),
+                          r0.field2.read());
 
     // r0.field1([](auto f1){
     //         return f1 & 0x3;
@@ -845,13 +815,11 @@ int main() {
     // lambda-based rmw
     apply(
         // self-referenced rmw
-        r0.field1([](auto f1){
-            std::cout << "self-ref field1 " << f1 << std::endl;
-            return f1 | 0x8;
+        r0.field1([&t](auto f1){
+            return f1 & t | 0x8;
         }),
         // multi-referenced rmw
         r0.field2([](auto f0, auto f1, auto f2) {
-            std::cout << "mult-ref field0 " << f0 << " field1 " << f1 << " field2 " << f2 << std::endl;
             return f0 + f1 + f2;
         }, 
         r0.field0, r0.field1, r0.field2)
