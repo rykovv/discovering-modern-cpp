@@ -173,7 +173,7 @@ constexpr auto forwarder(T && t) {
 }
 
 template<typename T, unsigned S>
-struct to_tuple_helper {};
+struct to_tuple_helper;
 
 template <typename T>
 struct to_tuple_helper<T, 0> {
@@ -336,14 +336,7 @@ struct field {
         static_assert(access_type != AccessType::RO, "cannot write read-only field");
         static_assert(std::numeric_limits<value_type>::digits >= std::numeric_limits<T>::digits, "Unsafe assignment. Assigned value type is too wide.");
 
-        value_type value;
-        if (rhs <= mask >> lsb) {
-            value = rhs;
-        } else {
-            value = ros::error::handle<field>(rhs);
-        }
-
-        return ros::detail::field_assignment_safe_runtime<field>{value};
+        return ros::detail::field_assignment_safe_runtime<field>{check(rhs)};
     }
 
     template <typename T>
@@ -353,15 +346,8 @@ struct field {
     constexpr auto operator= (T && rhs) const -> ros::detail::field_assignment_safe_runtime<field> {
         static_assert(access_type != AccessType::RO, "cannot write read-only field");
         static_assert(std::numeric_limits<value_type>::digits >= std::numeric_limits<T>::digits, "Unsafe assignment. Assigned value type is too wide.");
-
-        value_type value;
-        if (rhs <= mask >> lsb) {
-            value = rhs;
-        } else {
-            value = ros::error::handle<field>(rhs);
-        }
         
-        return ros::detail::field_assignment_safe_runtime<field>{value};
+        return ros::detail::field_assignment_safe_runtime<field>{check(rhs)};
     }
 
     constexpr auto read() const -> ros::detail::field_read<field> {
@@ -833,19 +819,20 @@ auto apply(Op op, Ops ...ops) -> return_reads_t<decltype(filter::tuple_filter<is
 
     // [TODO] static_assert on only one assignment operation per field per apply
 
+    auto operations = std::make_tuple(op, ops...);
     value_type value{};
 
-    constexpr bool return_reads = std::disjunction_v<std::is_same<Op, ros::detail::field_read<typename Op::type>>, std::is_same<Ops, ros::detail::field_read<typename Ops::type>>...>;
+    // constexpr bool return_reads = std::disjunction_v<std::is_same<Op, ros::detail::field_read<typename Op::type>>, std::is_same<Ops, ros::detail::field_read<typename Ops::type>>...>;
 
     // compile-time writes
-    auto safe_writes = filter::tuple_filter<is_field_assignment_safe>(std::make_tuple(op, ops...));
+    auto safe_writes = filter::tuple_filter<is_field_assignment_safe>(operations);
     // runtime writes
-    auto safe_runtime_writes = filter::tuple_filter<is_field_assignment_safe_runtime>(std::make_tuple(op, ops...));
-    auto unsafe_writes = filter::tuple_filter<is_field_assignment_unsafe>(std::make_tuple(op, ops...));
+    auto safe_runtime_writes = filter::tuple_filter<is_field_assignment_safe_runtime>(operations);
+    auto unsafe_writes = filter::tuple_filter<is_field_assignment_unsafe>(operations);
 
     auto runtime_writes = std::tuple_cat(safe_runtime_writes, unsafe_writes);
 
-    auto invocable_writes = filter::tuple_filter<is_field_assignment_invocable>(std::make_tuple(op, ops...));
+    auto invocable_writes = filter::tuple_filter<is_field_assignment_invocable>(operations);
 
     constexpr value_type comptime_write_mask = detail::get_write_mask<value_type>(safe_writes);
     constexpr value_type runtime_write_mask = detail::get_write_mask<value_type>(runtime_writes);
@@ -858,18 +845,20 @@ auto apply(Op op, Ops ...ops) -> return_reads_t<decltype(filter::tuple_filter<is
         constexpr bool is_partial_write = (rmw_mask & write_mask != rmw_mask);
         constexpr bool has_invocable_writes = std::tuple_size_v<decltype(invocable_writes)> > 0;
 
-        if constexpr (is_partial_write) {
+        if constexpr (is_partial_write | has_invocable_writes) {
             value = bus::template read<value_type>(Reg::address::value);
         }
+
+        // evaluate invocables at the beginning
+        // it doesn't make much sense to evaluate it at the end because it will have 
+        // newly assigned values. this way just literals could be provided in the lambda
+        value = detail::get_invocable_write_value(value, invocable_write_mask, invocable_writes);
 
         // [TODO] study efficiency of bundling together all writes
         // compile time
         value = detail::get_write_value(value, comptime_write_mask, safe_writes);
         // runtime
         value = detail::get_write_value(value, runtime_write_mask, runtime_writes);
-
-        // evaluate invocables at the end
-        value = detail::get_invocable_write_value(value, invocable_write_mask, invocable_writes);
 
         bus::write(value, Reg::address::value);
     } else /* if (return_reads) */ {
@@ -881,7 +870,7 @@ auto apply(Op op, Ops ...ops) -> return_reads_t<decltype(filter::tuple_filter<is
         return std::make_tuple(Ts::type::to_field(value)...);
     };
 
-    return get_read_fields(filter::tuple_filter<is_field_read>(std::make_tuple(op, ops...)));
+    return get_read_fields(filter::tuple_filter<is_field_read>(operations));
 }
 
 template <typename T, typename Reg, unsigned msb, unsigned lsb, ros::AccessType AT>
