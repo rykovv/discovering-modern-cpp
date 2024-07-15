@@ -651,28 +651,58 @@ template <bool B, std::size_t I>
 using conditional_index_sequence_t = typename conditional_index_sequence<B, I>::type;
 
 template <template <typename> class Predicate, typename Tuple, std::size_t... Is>
-constexpr auto filtered_index_sequence_helper(const Tuple& tuple, std::index_sequence<Is...>) {
-    return index_sequence_concat_t<
+struct filtered_index_sequence {
+    using type = index_sequence_concat_t<
         conditional_index_sequence_t<
             Predicate<std::tuple_element_t<Is, Tuple>>::value,
             Is
         >...
-    >{};
-}
+    >;
+};
 
-template <template <typename> class Predicate, typename Tuple>
-constexpr auto filtered_index_sequence(const Tuple& tuple) {
-    return filtered_index_sequence_helper<Predicate>(tuple, std::make_index_sequence<std::tuple_size<Tuple>::value>{});
-}
+template <template <typename> class Predicate, typename Tuple, std::size_t... Is>
+using filtered_index_sequence_t = filtered_index_sequence<Predicate, Tuple, Is...>::type;
+
+// template <template <typename> class Predicate, typename Tuple, std::size_t... Is>
+// constexpr auto filtered_index_sequence_helper(const Tuple& tuple, std::index_sequence<Is...>) {
+//     return index_sequence_concat_t<
+//         conditional_index_sequence_t<
+//             Predicate<std::tuple_element_t<Is, Tuple>>::value,
+//             Is
+//         >...
+//     >{};
+// }
+
+// template <template <typename> class Predicate, typename Tuple, std::size_t... Is>
+// constexpr auto filtered_index_sequence_helper(const Tuple& tuple, std::index_sequence<Is...>) {
+//     return index_sequence_concat_t<
+//         conditional_index_sequence_t<
+//             Predicate<std::tuple_element_t<Is, Tuple>>::value,
+//             Is
+//         >...
+//     >{};
+// }
+
+// template <template <typename> class Predicate, typename Tuple>
+// constexpr auto filtered_index_sequence(const Tuple& tuple) {
+//     return filtered_index_sequence_helper<Predicate>(tuple, std::make_index_sequence<std::tuple_size<Tuple>::value>{});
+// }
+
+// filtered_index_sequence_t<Predicate, Tuple, Is...>
 
 template <typename Tuple, std::size_t... Is>
-constexpr auto tuple_filter_helper(const Tuple& tuple, std::index_sequence<Is...>) {
+constexpr auto tuple_filter_apply(const Tuple& tuple, std::index_sequence<Is...>) {
     return std::make_tuple(std::get<Is>(tuple)...);
+}
+
+template <template <typename> class Predicate, typename Tuple, std::size_t... Is>
+constexpr auto tuple_filter_helper(const Tuple& tuple, std::index_sequence<Is...>) {
+    return tuple_filter_apply(tuple, filtered_index_sequence_t<Predicate, Tuple, Is...>{});
 }
 
 template <template <typename> class Predicate, typename Tuple>
 constexpr auto tuple_filter(const Tuple& tuple) {
-    return tuple_filter_helper(tuple, filtered_index_sequence<Predicate>(tuple));
+    return tuple_filter_helper<Predicate>(tuple, std::make_index_sequence<std::tuple_size_v<Tuple>>{});
 }
 }
 
