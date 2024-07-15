@@ -222,19 +222,19 @@ constexpr auto to_tuple(T const& t) {
 }
 
 namespace detail {
-template <typename T, typename ...Ts, unsigned ...Idx>
-constexpr auto get_rwm_mask_helper (std::tuple<T, Ts...> const& t, std::integer_sequence<unsigned, Idx...>) -> typename T::value_type {
+template <typename T, typename ...Ts, std::size_t ...Idx>
+constexpr auto get_rwm_mask_helper (std::tuple<T, Ts...> const& t, std::index_sequence<Idx...>) -> typename T::value_type {
     return ((std::get<Idx>(t).access_type == ros::AccessType::RW ? std::get<Idx>(t).mask : 0) | ...);
 };
 
 template <typename Reg>
 constexpr typename Reg::value_type get_rmw_mask (Reg const& r) {
     auto tup = reflect::to_tuple(r);
-    return get_rwm_mask_helper(tup, std::make_integer_sequence<unsigned, reflect::MemberCounter<Reg>()>{});
+    return get_rwm_mask_helper(tup, std::make_index_sequence<reflect::MemberCounter<Reg>()>{});
 }
 
-template <typename Tuple, unsigned ...Idx>
-constexpr auto get_write_mask_helper (Tuple const& tup, std::integer_sequence<unsigned, Idx...>) {
+template <typename Tuple, std::size_t ...Idx>
+constexpr auto get_write_mask_helper (Tuple const& tup, std::index_sequence<Idx...>) {
     return (std::tuple_element_t<Idx, Tuple>::type::mask | ...);
 };
 
@@ -245,7 +245,7 @@ constexpr T get_write_mask (std::tuple<> const& tup) {
 
 template <typename T, typename... Ts>
 constexpr T get_write_mask (std::tuple<Ts...> const& tup) {
-    return get_write_mask_helper(tup, std::make_integer_sequence<unsigned, sizeof...(Ts)>{});
+    return get_write_mask_helper(tup, std::make_index_sequence<sizeof...(Ts)>{});
 }
 }
 
@@ -893,14 +893,14 @@ constexpr T& operator<= (T & lhs, ros::field<Reg, msb, lsb, AT> const& rhs) {
 
 
 // debug tuple print
-template <typename ...Ts, unsigned ...Idx>
-constexpr void print_tuple_helper(std::tuple<Ts...> const& t, std::integer_sequence<unsigned, Idx...> iseq) {
+template <typename ...Ts, std::size_t ...Idx>
+constexpr void print_tuple_helper(std::tuple<Ts...> const& t, std::index_sequence<Idx...> iseq) {
     ((std::cout << std::get<Idx>(t).value << ", "),...);
 }
 
 template <typename ...Ts>
 constexpr void print_tuple(std::tuple<Ts...> const& t) {
-    print_tuple_helper(t, std::make_integer_sequence<unsigned, sizeof...(Ts)>{});
+    print_tuple_helper(t, std::make_index_sequence<sizeof...(Ts)>{});
 }
 
 
