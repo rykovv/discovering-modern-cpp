@@ -663,33 +663,6 @@ struct filtered_index_sequence {
 template <template <typename> class Predicate, typename Tuple, std::size_t... Is>
 using filtered_index_sequence_t = filtered_index_sequence<Predicate, Tuple, Is...>::type;
 
-// template <template <typename> class Predicate, typename Tuple, std::size_t... Is>
-// constexpr auto filtered_index_sequence_helper(const Tuple& tuple, std::index_sequence<Is...>) {
-//     return index_sequence_concat_t<
-//         conditional_index_sequence_t<
-//             Predicate<std::tuple_element_t<Is, Tuple>>::value,
-//             Is
-//         >...
-//     >{};
-// }
-
-// template <template <typename> class Predicate, typename Tuple, std::size_t... Is>
-// constexpr auto filtered_index_sequence_helper(const Tuple& tuple, std::index_sequence<Is...>) {
-//     return index_sequence_concat_t<
-//         conditional_index_sequence_t<
-//             Predicate<std::tuple_element_t<Is, Tuple>>::value,
-//             Is
-//         >...
-//     >{};
-// }
-
-// template <template <typename> class Predicate, typename Tuple>
-// constexpr auto filtered_index_sequence(const Tuple& tuple) {
-//     return filtered_index_sequence_helper<Predicate>(tuple, std::make_index_sequence<std::tuple_size<Tuple>::value>{});
-// }
-
-// filtered_index_sequence_t<Predicate, Tuple, Is...>
-
 template <typename Tuple, std::size_t... Is>
 constexpr auto tuple_filter_apply(const Tuple& tuple, std::index_sequence<Is...>) {
     return std::make_tuple(std::get<Is>(tuple)...);
@@ -826,22 +799,46 @@ constexpr T get_invocable_write_value(T value, T mask, std::tuple<> const& tup) 
 
 // namespace ros {
 
-template<typename ...Fields>
-void apply(Fields ...fields);
+template<typename... Ops>
+void apply(Ops... ops);
 
 template<>
 void apply() {};
 
-template<typename Op, typename ...Ops>
-concept Applicable = (
-    // [TODO] refine to be a generic operation instead of field
-    ros::is_field_v<typename Op::type> && (is_field_v<typename Ops::type> && ...)
-) && (
-    std::is_same_v<typename Op::type::reg, typename Ops::type::reg> && ...
-);
+template <typename... Ops>
+struct one_field_assignment_per_apply;
+
+template <>
+struct one_field_assignment_per_apply<> {
+    static constexpr bool value = true;
+};
+
+template <typename Op>
+struct one_field_assignment_per_apply<Op> {
+    static constexpr bool value = true;
+};
+
+template <typename Op0, typename Op1, typename... Ops>
+struct one_field_assignment_per_apply<Op0, Op1, Ops...> {
+    using Op0Field = typename Op0::type;
+    static constexpr std::size_t count = std::is_base_of_v<detail::field_assignment<Op0Field>, Op1> + (std::is_base_of_v<detail::field_assignment<Op0Field>, Ops> + ...);
+    static_assert(count > 1, "More than one same field assignment per apply is not allowed");
+    static constexpr bool value = count == 1 && one_field_assignment_per_apply<Op1, Ops..., Op0>::value;
+};
+
+
 
 template<typename Op, typename ...Ops>
-requires Applicable<Op, Ops...>
+concept SameRegisterOperations = (std::is_same_v<typename Op::type::reg, typename Ops::type::reg> && ...);
+
+template<typename Op, typename ...Ops>
+concept FieldOperations = ros::is_field_v<typename Op::type> && (is_field_v<typename Ops::type> && ...);
+
+template<typename Op, typename ...Ops>
+concept ApplicableFieldOperations = FieldOperations<Op, Ops...> && SameRegisterOperations<Op, Ops...>;
+
+template<typename Op, typename ...Ops>
+requires ApplicableFieldOperations<Op, Ops...>
 auto apply(Op op, Ops ...ops) -> return_reads_t<decltype(filter::tuple_filter<is_field_read>(std::make_tuple(op, ops...)))> {
     using value_type = typename Op::type::value_type;
     using Reg = typename Op::type::reg;
@@ -875,7 +872,7 @@ auto apply(Op op, Ops ...ops) -> return_reads_t<decltype(filter::tuple_filter<is
         constexpr bool is_partial_write = (rmw_mask & write_mask != rmw_mask);
         constexpr bool has_invocable_writes = std::tuple_size_v<decltype(invocable_writes)> > 0;
 
-        if constexpr (is_partial_write | has_invocable_writes) {
+        if constexpr (is_partial_write || has_invocable_writes) {
             value = bus::template read<value_type>(Reg::address::value);
         }
 
