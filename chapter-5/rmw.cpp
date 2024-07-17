@@ -122,32 +122,33 @@ struct register_read;
 
 template <typename Field>
 struct unsafe_field_operations_handler {
+    using value_type = typename Field::value_type;
+
     constexpr auto operator= (auto const& rhs) const -> field_assignment_unsafe<Field> {
         static_assert(Field::access_type != AccessType::RO, "cannot write read-only field");
-        // narrowing conversion from int to unsigned int
-        return ros::detail::field_assignment_unsafe<Field>(rhs);
+        // safe static_case because assignment overload checked type and width validity
+        return ros::detail::field_assignment_unsafe<Field>{static_cast<value_type>(rhs)};
     }
 
     constexpr auto operator= (auto && rhs) const -> field_assignment_unsafe<Field> {
         static_assert(Field::access_type != AccessType::RO, "cannot write read-only field");
-        // narrowing conversion from int to unsigned int
-        return field_assignment_unsafe<Field>(rhs);
+        // safe static_case because assignment overload checked type and width validity
+        return field_assignment_unsafe<Field>{static_cast<value_type>(rhs)};
     }
 };
 
 template <typename Register>
-// [TODO]: decide what to do with RO fields
 struct unsafe_register_operations_handler {
+    using value_type = typename Register::value_type;
+
     constexpr auto operator= (auto const& rhs) const -> register_assignment_unsafe<Register> {
-        // static_assert(Register::access_type != AccessType::RO, "cannot write read-only field");
-        // narrowing conversion from int to unsigned int
-        return ros::detail::register_assignment_unsafe<Register>(rhs);
+        // safe static_case because assignment overload checked type and width validity
+        return ros::detail::register_assignment_unsafe<Register>{static_cast<value_type>(rhs)};
     }
 
     constexpr auto operator= (auto && rhs) const -> register_assignment_unsafe<Register> {
-        // static_assert(Register::access_type != AccessType::RO, "cannot write read-only field");
-        // narrowing conversion from int to unsigned int
-        return register_assignment_unsafe<Register>(rhs);
+        // safe static_case because assignment overload checked type and width validity
+        return register_assignment_unsafe<Register>{static_cast<value_type>(rhs)};
     }
 };
 }
@@ -272,9 +273,8 @@ namespace error {
 
     template <typename Register, typename T = typename Register::value_type>
     constexpr RegErrorHandler<Register> maskHandler = [](T v) -> T {
-        std::cout << "mask handler with " << v << std::endl;
-        constexpr T rmw_mask = detail::get_rmw_mask(Register{});
-        return T{v & rmw_mask};
+        std::cout << "Attempt to assign read-only bits with " << v << std::endl;
+        return T{v & Register::layout};
     };
 }
 
@@ -531,23 +531,12 @@ struct reg {
     using bus = b;
     using address = std::integral_constant<std::size_t, addr>;
 
-    // using f = typename DerivedReg::Fields;
-    // using value_type = typename DerivedReg::Fields::value_type;
-    // static constexpr value_type layout = DerivedReg::Fields::layout;
-
-    // // static constexpr bool needs_read (value_type new_value) {
-    // //     return !(((F0::mask & new_value) > 0) && (((Fs::mask & new_value) > 0) && ...));
-    // // }
-
-    // static constexpr value_type update (value_type old_value, value_type new_value) {
-    //     return (old_value & ~layout) | (new_value & layout);
-    // }
+    static constexpr value_type layout = detail::get_rmw_mask(Reg{});
 
     template <typename U, U val>
     requires (std::is_convertible_v<U, value_type>)
     constexpr auto operator= (std::integral_constant<U, val>) const -> ros::detail::register_assignment_safe<reg, val> {
-        // static_assert(access_type != AccessType::RO, "cannot write read-only field");
-        // static_assert(val <= (mask >> lsb), "assigned value greater than allowed");
+        static_assert(val & ~layout, "Attempt to assign read-only bits");
         return ros::detail::register_assignment_safe<reg, val>{};
     }
 
@@ -555,33 +544,31 @@ struct reg {
     template <typename U>
     requires std::unsigned_integral<U> && std::is_convertible_v<U, value_type>
     constexpr auto operator= (U const& rhs) const -> ros::detail::register_assignment_safe_runtime<reg> {
-        // static_assert(access_type != AccessType::RO, "cannot write read-only field");
-        // static_assert(std::numeric_limits<value_type>::digits >= std::numeric_limits<T>::digits, "Unsafe assignment. Assigned value type is too wide.");
+        static_assert(std::numeric_limits<value_type>::digits >= std::numeric_limits<T>::digits, "Unsafe assignment. Assigned value type is too wide.");
 
-        // value_type value;
-        // if (rhs <= mask >> lsb) {
-        //     value = rhs;
-        // } else {
-        //     value = ros::error::handle<field>(rhs);
-        // }
+        value_type value;
+        if (rhs & ~layout) {
+            value = ros::error::maskHandler<reg>(rhs);
+        } else {
+            value = rhs;
+        }
 
-        return ros::detail::register_assignment_safe_runtime<reg>{rhs};
+        return ros::detail::register_assignment_safe_runtime<reg>{value};
     }
 
     template <typename U>
     requires std::unsigned_integral<U> && std::is_convertible_v<U, value_type>
     constexpr auto operator= (T && rhs) const -> ros::detail::register_assignment_safe_runtime<reg> {
-        // static_assert(access_type != AccessType::RO, "cannot write read-only field");
-        // static_assert(std::numeric_limits<value_type>::digits >= std::numeric_limits<T>::digits, "Unsafe assignment. Assigned value type is too wide.");
+        static_assert(std::numeric_limits<value_type>::digits >= std::numeric_limits<T>::digits, "Unsafe assignment. Assigned value type is too wide.");
 
-        // value_type value;
-        // if (rhs <= mask >> lsb) {
-        //     value = rhs;
-        // } else {
-        //     value = ros::error::handle<field>(rhs);
-        // }
+        value_type value;
+        if (rhs & ~layout) {
+            value = ros::error::maskHandler<reg>(rhs);
+        } else {
+            value = rhs;
+        }
         
-        return ros::detail::register_assignment_safe_runtime<reg>{rhs};
+        return ros::detail::register_assignment_safe_runtime<reg>{value};
     }
 
     constexpr auto read() const -> ros::detail::register_read<reg> {
@@ -600,6 +587,13 @@ struct reg {
 
     static constexpr ros::detail::unsafe_register_operations_handler<reg> unsafe{};
 };
+
+template <typename T>
+constexpr bool is_reg_v = false;
+
+template <typename r, typename T, typename b, std::size_t addr>
+constexpr bool is_reg_v<reg<r, T, b, addr>> = true;
+
 
 namespace literals {
 template <char ...Chars>
@@ -742,6 +736,16 @@ struct return_reads<std::tuple<FieldReads...>> {
 template <typename ...Ts>
 using return_reads_t = typename return_reads<Ts...>::type;
 
+template <typename>
+struct is_register_read {
+    static constexpr bool value = false;
+};
+
+template <typename Register>
+struct is_register_read<ros::detail::register_read<Register>> {
+    static constexpr bool value = true;
+};
+
 
 namespace detail {
 template <typename T, typename Tuple, std::size_t... Idx>
@@ -833,6 +837,37 @@ concept ApplicableFieldOperations =
     FieldOperations<Op, Ops...> && 
     SameRegisterOperations<Op, Ops...> && 
     OneFieldAssignmentPerApply<Op, Ops...>;
+
+
+template <typename... Ops>
+struct one_register_assignment_per_apply;
+
+template <>
+struct one_register_assignment_per_apply<> : std::true_type {};
+
+template <typename Op>
+struct one_register_assignment_per_apply<Op> : std::true_type {};
+
+template <typename Op, typename... Ops>
+struct one_register_assignment_per_apply<Op, Ops...> {
+    using OpRegister = typename Op::type;
+    static constexpr bool more_than_one = (std::is_base_of_v<detail::register_assignment<OpRegister>, Ops> || ...);
+    static constexpr bool value = not more_than_one and one_field_assignment_per_apply<Ops...>::value;
+};
+
+template <typename... Ops>
+constexpr bool one_register_assignment_per_apply_v = one_field_assignment_per_apply<Ops...>::value;
+
+template<typename ...Ops>
+concept OneRegisterAssignmentPerApply = one_register_assignment_per_apply_v<Ops...>;
+
+template<typename ...Ops>
+concept RegisterOperations = (is_reg_v<typename Ops::type> && ...);
+
+template<typename Op, typename ...Ops>
+concept ApplicableRegisterOperations = 
+    RegisterOperations<Op, Ops...> && 
+    OneRegisterAssignmentPerApply<Op, Ops...>;
 }
 
 void apply() {};
@@ -897,6 +932,14 @@ auto apply(Op op, Ops ...ops) -> return_reads_t<decltype(filter::tuple_filter<is
 
     return get_read_fields(filter::tuple_filter<is_field_read>(operations));
 }
+
+
+template<typename Op, typename ...Ops>
+requires detail::ApplicableRegisterOperations<Op, Ops...>
+auto apply(Op op, Ops ...ops) -> return_reads_t<decltype(filter::tuple_filter<is_register_read>(std::make_tuple(op, ops...)))> {
+    
+}
+
 
 template <typename T, typename Reg, unsigned msb, unsigned lsb, ros::AccessType AT>
 concept SafeAssignable = requires {
