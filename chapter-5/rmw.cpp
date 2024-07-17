@@ -799,8 +799,7 @@ constexpr T get_invocable_write_value(T value, T mask, std::tuple<> const& tup) 
 
 // namespace ros {
 
-void apply() {};
-
+namespace detail {
 template <typename... Ops>
 struct one_field_assignment_per_apply;
 
@@ -834,9 +833,12 @@ concept ApplicableFieldOperations =
     FieldOperations<Op, Ops...> && 
     SameRegisterOperations<Op, Ops...> && 
     OneFieldAssignmentPerApply<Op, Ops...>;
+}
+
+void apply() {};
 
 template<typename Op, typename ...Ops>
-requires ApplicableFieldOperations<Op, Ops...>
+requires detail::ApplicableFieldOperations<Op, Ops...>
 auto apply(Op op, Ops ...ops) -> return_reads_t<decltype(filter::tuple_filter<is_field_read>(std::make_tuple(op, ops...)))> {
     using value_type = typename Op::type::value_type;
     using Reg = typename Op::type::reg;
