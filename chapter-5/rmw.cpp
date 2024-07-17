@@ -799,43 +799,41 @@ constexpr T get_invocable_write_value(T value, T mask, std::tuple<> const& tup) 
 
 // namespace ros {
 
-template<typename... Ops>
-void apply(Ops... ops);
-
-template<>
 void apply() {};
 
 template <typename... Ops>
 struct one_field_assignment_per_apply;
 
 template <>
-struct one_field_assignment_per_apply<> {
-    static constexpr bool value = true;
-};
+struct one_field_assignment_per_apply<> : std::true_type {};
 
 template <typename Op>
-struct one_field_assignment_per_apply<Op> {
-    static constexpr bool value = true;
+struct one_field_assignment_per_apply<Op> : std::true_type {};
+
+template <typename Op, typename... Ops>
+struct one_field_assignment_per_apply<Op, Ops...> {
+    using OpField = typename Op::type;
+    static constexpr bool more_than_one = (std::is_base_of_v<detail::field_assignment<OpField>, Ops> || ...);
+    static constexpr bool value = not more_than_one and one_field_assignment_per_apply<Ops...>::value;
 };
 
-template <typename Op0, typename Op1, typename... Ops>
-struct one_field_assignment_per_apply<Op0, Op1, Ops...> {
-    using Op0Field = typename Op0::type;
-    static constexpr std::size_t count = std::is_base_of_v<detail::field_assignment<Op0Field>, Op1> + (std::is_base_of_v<detail::field_assignment<Op0Field>, Ops> + ...);
-    static_assert(count > 1, "More than one same field assignment per apply is not allowed");
-    static constexpr bool value = count == 1 && one_field_assignment_per_apply<Op1, Ops..., Op0>::value;
-};
+template <typename... Ops>
+constexpr bool one_field_assignment_per_apply_v = one_field_assignment_per_apply<Ops...>::value;
 
-
+template<typename ...Ops>
+concept OneFieldAssignmentPerApply = one_field_assignment_per_apply_v<Ops...>;
 
 template<typename Op, typename ...Ops>
 concept SameRegisterOperations = (std::is_same_v<typename Op::type::reg, typename Ops::type::reg> && ...);
 
-template<typename Op, typename ...Ops>
-concept FieldOperations = ros::is_field_v<typename Op::type> && (is_field_v<typename Ops::type> && ...);
+template<typename ...Ops>
+concept FieldOperations = (is_field_v<typename Ops::type> && ...);
 
 template<typename Op, typename ...Ops>
-concept ApplicableFieldOperations = FieldOperations<Op, Ops...> && SameRegisterOperations<Op, Ops...>;
+concept ApplicableFieldOperations = 
+    FieldOperations<Op, Ops...> && 
+    SameRegisterOperations<Op, Ops...> && 
+    OneFieldAssignmentPerApply<Op, Ops...>;
 
 template<typename Op, typename ...Ops>
 requires ApplicableFieldOperations<Op, Ops...>
@@ -843,8 +841,6 @@ auto apply(Op op, Ops ...ops) -> return_reads_t<decltype(filter::tuple_filter<is
     using value_type = typename Op::type::value_type;
     using Reg = typename Op::type::reg;
     using bus = typename Reg::bus;
-
-    // [TODO] static_assert on only one assignment operation per field per apply
 
     auto operations = std::make_tuple(op, ops...);
     value_type value{};
