@@ -179,60 +179,6 @@ struct unsafe_register_operations_handler {
         return register_assignment_unsafe<Register>{static_cast<value_type>(rhs)};
     }
 };
-
-template <typename Register>
-struct safe_register_operations_handler {
-    using value_type = typename Register::value_type;
-    static constexpr value_type layout = Register::layout;
-
-    template <typename U, U val>
-    requires (std::is_convertible_v<U, value_type>)
-    constexpr auto operator= (std::integral_constant<U, val>) const -> ros::detail::register_assignment_safe<Register, val> const {
-        static_assert(val & layout, "Attempt to assign read-only bits");
-        return ros::detail::register_assignment_safe<Register, val>{};
-    }
-
-    // [TODO] create concept
-    template <typename U>
-    requires std::unsigned_integral<U> && std::is_convertible_v<U, value_type>
-    constexpr auto operator= (U const& rhs) const -> ros::detail::register_assignment_safe_runtime<Register> {
-        static_assert(std::numeric_limits<value_type>::digits >= std::numeric_limits<U>::digits, "Unsafe assignment. Assigned value type is too wide.");
-
-        value_type value;
-        if (rhs & ~layout) {
-            value = ros::error::maskHandler<Register>(rhs);
-        } else {
-            value = rhs;
-        }
-
-        return ros::detail::register_assignment_safe_runtime<Register>{value};
-    }
-
-    template <typename U>
-    requires std::unsigned_integral<U> && std::is_convertible_v<U, value_type>
-    constexpr auto operator= (U && rhs) const -> ros::detail::register_assignment_safe_runtime<Register> {
-        static_assert(std::numeric_limits<value_type>::digits >= std::numeric_limits<U>::digits, "Unsafe assignment. Assigned value type is too wide.");
-
-        value_type value;
-        if (rhs & ~layout) {
-            value = ros::error::maskHandler<Register>(rhs);
-        } else {
-            value = rhs;
-        }
-        
-        return ros::detail::register_assignment_safe_runtime<Register>{value};
-    }
-
-    constexpr auto operator() (std::invocable<value_type> auto f) const -> ros::detail::register_assignment_invocable<decltype(f), Register, Register> {
-        return ros::detail::register_assignment_invocable<decltype(f), Register, Register>{f};
-    }
-
-    template <typename F, typename Register0, typename... Registers>
-    requires std::invocable<F, typename Register0::value_type, typename Registers::value_type...>
-    constexpr auto operator() (F f, Register0 f0, Registers... fs) const -> ros::detail::register_assignment_invocable<F, Register, Register0, Registers...> {
-        return ros::detail::register_assignment_invocable<F, Register, Register0, Registers...>{f};
-    }
-};
 }
 
 namespace reflect {
@@ -591,7 +537,53 @@ struct reg {
         return ros::detail::register_read<reg>{};
     }
 
-    static constexpr ros::detail::safe_register_operations_handler<reg> safe{};
+    template <typename U, U val>
+    requires (std::is_convertible_v<U, value_type>)
+    constexpr auto operator= (std::integral_constant<U, val>) const -> ros::detail::register_assignment_safe<reg, val> const {
+        static_assert(static_cast<value_type>(val & ~layout) == 0, "Attempt to assign read-only bits");
+        return ros::detail::register_assignment_safe<reg, val>{};
+    }
+
+    template <typename U>
+    requires std::integral<U> && std::is_convertible_v<U, value_type>
+    constexpr auto operator= (U const& rhs) const -> ros::detail::register_assignment_safe_runtime<reg> {
+        static_assert(std::numeric_limits<value_type>::digits >= std::numeric_limits<U>::digits, "Unsafe assignment. Assigned value type is too wide.");
+
+        value_type value;
+        if (rhs & ~layout) {
+            value = ros::error::maskHandler<reg>(rhs);
+        } else {
+            value = rhs;
+        }
+
+        return ros::detail::register_assignment_safe_runtime<reg>{value};
+    }
+
+    template <typename U>
+    requires std::integral<U> && std::is_convertible_v<U, value_type>
+    constexpr auto operator= (U && rhs) const -> ros::detail::register_assignment_safe_runtime<reg> {
+        static_assert(std::numeric_limits<value_type>::digits >= std::numeric_limits<U>::digits, "Unsafe assignment. Assigned value type is too wide.");
+
+        value_type value;
+        if (rhs & ~layout) {
+            value = ros::error::maskHandler<reg>(rhs);
+        } else {
+            value = rhs;
+        }
+        
+        return ros::detail::register_assignment_safe_runtime<reg>{value};
+    }
+
+    constexpr auto operator() (std::invocable<value_type> auto f) const -> ros::detail::register_assignment_invocable<decltype(f), reg, reg> {
+        return ros::detail::register_assignment_invocable<decltype(f), reg, reg>{f};
+    }
+
+    template <typename F, typename Register0, typename... Registers>
+    requires std::invocable<F, typename Register0::value_type, typename Registers::value_type...>
+    constexpr auto operator() (F f, Register0 f0, Registers... fs) const -> ros::detail::register_assignment_invocable<F, reg, Register0, Registers...> {
+        return ros::detail::register_assignment_invocable<F, reg, Register0, Registers...>{f};
+    }
+
     static constexpr ros::detail::unsafe_register_operations_handler<reg> unsafe{};
 };
 
@@ -1018,8 +1010,8 @@ struct my_reg : ros::reg<my_reg, uint32_t, mmio_bus, 0x2000> {
     using ros::reg<my_reg, uint32_t, mmio_bus, 0x2000>::operator=;
 
     ros::field<my_reg, 4, 0, ros::AccessType::RW> field0;
-    ros::field<my_reg, 12, 8, ros::AccessType::RW> field1;
-    ros::field<my_reg, 20, 16, ros::AccessType::RW> field2;
+    ros::field<my_reg, 12, 4, ros::AccessType::RW> field1;
+    ros::field<my_reg, 28, 12, ros::AccessType::RW> field2;
     ros::field<my_reg, 31, 28, ros::AccessType::RO> field3;
     // ros::disjoint_field<
     //     ros::field<my_reg, 2, 0, ros::AccessType::RW>,
@@ -1054,8 +1046,10 @@ int main() {
     // [TODO]: Add register operations support
     // write whole reg
     // checks attempts to write RO fields
-    // apply(r0 = 2032);
-    apply(r0.safe = 0xF0000_r,
+    apply(r0([](auto old_r0) {
+        return old_r0 | 0x3;
+    }));
+    apply(r0 = 0xf0000000,
           r0.read());
     // read while reg
     // uint32_t value;
