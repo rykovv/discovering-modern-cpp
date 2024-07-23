@@ -522,6 +522,10 @@ struct bus {
     static T read(Addr address);
     template <typename T, typename Addr>
     static void write(T val, Addr address);
+    template <typename... Ts>
+    static std::tuple<typename Ts::type::value_type...> read(std::tuple<typename Ts::type::address...> reads);
+    template <typename... Ts>
+    static void write(std::tuple<typename Ts::type::value_type...> writes);
 };
 
 template <typename r, typename T, typename b, std::size_t addr>
@@ -582,6 +586,10 @@ struct reg {
     requires std::invocable<F, typename Register0::value_type, typename Registers::value_type...>
     constexpr auto operator() (F f, Register0 f0, Registers... fs) const -> ros::detail::register_assignment_invocable<F, reg, Register0, Registers...> {
         return ros::detail::register_assignment_invocable<F, reg, Register0, Registers...>{f};
+    }
+
+    constexpr bool is_adacent (std::size_t adr) {
+        return (address::value + sizeof(value_type) == adr);
     }
 
     static constexpr ros::detail::unsafe_register_operations_handler<reg> unsafe{};
