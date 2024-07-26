@@ -297,6 +297,24 @@ constexpr T get_write_mask (std::tuple<Ts...> const& tup) {
 
 // [TODO]: Add disjoint field support
 
+namespace detail {
+template <typename T>
+concept FieldType = std::integral<T>;
+
+template <FieldType T, T val>
+struct field_value {
+    static constexpr T value = val;
+};
+
+template <typename T>
+concept RegisterType = std::integral<T>;
+
+template <RegisterType T, T val>
+struct register_value {
+    static constexpr T value = val;
+};
+}
+
 template <typename Reg, detail::msb msb, detail::lsb lsb, AccessType AT>
 requires FieldSelectable<typename Reg::value_type, msb, lsb>
 struct field {
@@ -323,7 +341,7 @@ struct field {
 
     template <typename U, U val>
     requires (std::is_convertible_v<U, value_type>)
-    constexpr auto operator= (std::integral_constant<U, val>) const -> ros::detail::field_assignment_safe<field, val> {
+    constexpr auto operator= (detail::field_value<U, val>) const -> ros::detail::field_assignment_safe<field, val> {
         static_assert(access_type != AccessType::RO, "cannot write read-only field");
         static_assert(val <= (mask >> lsb.value), "assigned value greater than allowed");
         return ros::detail::field_assignment_safe<field, val>{};
@@ -346,9 +364,9 @@ struct field {
 
     // [TODO] create concept
     template <typename T>
-    requires (std::is_convertible_v<T, value_type> &&
-              std::numeric_limits<T>::digits >= msb.value - lsb.value) &&
-    requires {requires std::unsigned_integral<T>;}
+    requires (std::unsigned_integral<T> &&
+              std::is_convertible_v<T, value_type> &&
+              std::numeric_limits<T>::digits >= msb.value - lsb.value)
     constexpr auto operator= (T const& rhs) const -> ros::detail::field_assignment_safe_runtime<field> {
         static_assert(access_type != AccessType::RO, "cannot write read-only field");
         static_assert(std::numeric_limits<value_type>::digits >= std::numeric_limits<T>::digits, "Unsafe assignment. Assigned value type is too wide.");
@@ -357,9 +375,9 @@ struct field {
     }
 
     template <typename T>
-    requires (std::is_convertible_v<T, value_type> &&
-              std::numeric_limits<T>::digits >= msb.value - lsb.value) &&
-    requires {requires std::unsigned_integral<T>;}
+    requires (std::unsigned_integral<T> &&
+              std::is_convertible_v<T, value_type> &&
+              std::numeric_limits<T>::digits >= msb.value - lsb.value)
     constexpr auto operator= (T && rhs) const -> ros::detail::field_assignment_safe_runtime<field> {
         static_assert(access_type != AccessType::RO, "cannot write read-only field");
         static_assert(std::numeric_limits<value_type>::digits >= std::numeric_limits<T>::digits, "Unsafe assignment. Assigned value type is too wide.");
@@ -545,7 +563,7 @@ struct bus {
     static void write(std::tuple<AdjacentAddrs...> addrs, std::tuple<ValueTypes...> values);
 };
 
-template <typename r, typename T, typename b, std::size_t addr>
+template <typename r, detail::RegisterType T, typename b, std::size_t addr>
 struct reg {
     using Reg = r;
     using value_type = T;
@@ -560,7 +578,7 @@ struct reg {
 
     template <typename U, U val>
     requires (std::is_convertible_v<U, value_type>)
-    constexpr auto operator= (std::integral_constant<U, val>) const -> ros::detail::register_assignment_safe<reg, val> const {
+    constexpr auto operator= (detail::register_value<U, val>) const -> ros::detail::register_assignment_safe<reg, val> const {
         static_assert(static_cast<value_type>(val & ~layout) == 0, "Attempt to assign read-only bits");
         return ros::detail::register_assignment_safe<reg, val>{};
     }
@@ -605,7 +623,7 @@ struct reg {
         return ros::detail::register_assignment_invocable<F, reg, Register0, Registers...>{f};
     }
 
-    constexpr bool is_adacent (std::size_t adr) {
+    constexpr bool is_adjacent (std::size_t adr) {
         return (address::value + sizeof(value_type) == adr);
     }
 
@@ -628,7 +646,7 @@ constexpr auto operator""_f () {
     
     // std::cout << "<new value>_f = " << new_value << std::endl;
 
-    return std::integral_constant<T, new_value>{};
+    return detail::field_value<T, new_value>{};
 }
 
 template <char ...Chars>
@@ -638,7 +656,7 @@ constexpr auto operator""_r () {
     
     // std::cout << "<new value>_f = " << new_value << std::endl;
 
-    return std::integral_constant<T, new_value>{};
+    return detail::register_value<T, new_value>{};
 }
 
 template <char ...Chars>
@@ -1131,13 +1149,9 @@ struct my_reg : ros::reg<my_reg, uint32_t, mmio_bus, 0x2000> {
     ros::field<my_reg, 12_msb, 4_lsb, ros::AccessType::RW> field1;
     ros::field<my_reg, 28_msb, 12_lsb, ros::AccessType::RW> field2;
     ros::field<my_reg, 31_msb, 28_lsb, ros::AccessType::RO> field3;
-    // ros::field<my_reg, ros::detail::msb<unsigned, 4>, 0, ros::AccessType::RW> field0;
-    // ros::field<my_reg, ros::detail::msb<unsigned, 12>, 4, ros::AccessType::RW> field1;
-    // ros::field<my_reg, ros::detail::msb<unsigned, 28>, 12, ros::AccessType::RW> field2;
-    // ros::field<my_reg, ros::detail::msb<unsigned, 31>, 28, ros::AccessType::RO> field3;
-    // ros::disjoint_field<
-    //     ros::field<my_reg, 2, 0, ros::AccessType::RW>,
-    //     ros::field<my_reg, 5, 4, ros::AccessType::RO>
+    // ros::disjoint_field<my_reg, ros::AccessType::RW,
+    //     ros::field_segment<2_msb, 0_lsb>,
+    //     ros::field_segment<5_msb, 4_lsb>
     //     > dj_field;
 } r0;
 
