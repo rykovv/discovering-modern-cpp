@@ -742,83 +742,6 @@ constexpr auto tuple_filter(const Tuple& tuple) {
 }
 }
 
-namespace sort {
-template <typename A, std::size_t IsA, typename B, std::size_t IsB>
-struct min {
-    static constexpr std::size_t value = A::type::address::value < B::type::address::value ? A::type::address::value : B::type::address::value;
-    static constexpr std::size_t idx = A::type::address::value < B::type::address::value ? IsA : IsB;
-    static constexpr std::size_t left = A::type::address::value < B::type::address::value ? IsB : IsA;
-};
-
-template <template <typename, std::size_t, typename, std::size_t> typename Cmp, typename Tuple, std::size_t Is0, std::size_t... Is>
-struct cmp_index_sequence {
-    using element_type_t = std::tuple_element_t<Is0, Tuple>;
-    static constexpr std::size_t element_idx = Is0;
-
-    using next = cmp_index_sequence<Cmp, Tuple, Is...>;
-    
-    using cmp = Cmp<
-        element_type_t, element_idx,
-        typename next::element_type_t, next::idx // result of compare
-        >;
-
-    static constexpr std::size_t idx = cmp::idx;
-    
-    using rest = filter::index_sequence_concat_t<std::index_sequence<cmp::left>, typename next::rest>;
-};
-
-template <template <typename, std::size_t, typename, std::size_t> typename Cmp, typename Tuple, std::size_t Is>
-struct cmp_index_sequence<Cmp, Tuple, Is> {
-    using element_type_t = std::tuple_element_t<Is, Tuple>;
-    static constexpr std::size_t element_idx = Is;
-    static constexpr std::size_t idx = Is;
-
-    using rest = std::index_sequence<>;
-};
-
-template <template <typename, std::size_t, typename, std::size_t> typename Cmp, typename Tuple, std::size_t... Is>
-struct sorted_index_sequence {
-    using cmp = cmp_index_sequence<Cmp, Tuple, Is...>;
-    
-    static constexpr auto unpack_cmp_rest = []<std::size_t... Rs> (std::index_sequence<Rs...>) {
-        return filter::index_sequence_concat_t<
-            std::index_sequence<cmp::idx>,
-            typename sorted_index_sequence<Cmp, Tuple, Rs...>::type
-            >{};
-    };
-
-    using type = decltype( unpack_cmp_rest(typename cmp::rest{}) );
-};
-
-template <template <typename, std::size_t, typename, std::size_t> typename Cmp, typename Tuple, std::size_t Is0>
-struct sorted_index_sequence<Cmp, Tuple, Is0> {
-    using type = std::index_sequence<Is0>;
-};
-
-template <template <typename, std::size_t, typename, std::size_t> typename Cmp, typename Tuple>
-struct sorted_index_sequence<Cmp, Tuple> {
-    using type = std::index_sequence<>;
-};
-
-template <template <typename, std::size_t, typename, std::size_t> typename Cmp, typename Tuple, std::size_t... Is>
-using sorted_index_sequence_t = sorted_index_sequence<Cmp, Tuple, Is...>::type;
-
-template <typename Tuple, std::size_t... Is>
-constexpr auto tuple_sort_apply(const Tuple& tuple, std::index_sequence<Is...>) {
-    return std::make_tuple(std::get<Is>(tuple)...);
-}
-
-template <template <typename, std::size_t, typename, std::size_t> typename Cmp, typename Tuple, std::size_t... Is>
-constexpr auto tuple_sort_helper(const Tuple& tuple, std::index_sequence<Is...>) {
-    return tuple_sort_apply(tuple, sorted_index_sequence_t<Cmp, Tuple, Is...>{});
-}
-
-template <template <typename, std::size_t, typename, std::size_t> typename Cmp, typename Tuple>
-constexpr auto tuple_sort(const Tuple& tuple) {
-    return tuple_sort_helper<Cmp>(tuple, std::make_index_sequence<std::tuple_size_v<Tuple>>{});
-}
-}
-
 template <typename>
 struct is_field_read {
     static constexpr bool value = false;
@@ -1085,7 +1008,6 @@ requires detail::ApplicableRegisterOperations<Op, Ops...>
 auto apply(Op op, Ops ...ops) {// -> return_reads_t<decltype(filter::tuple_filter<is_register_read>(std::make_tuple(op, ops...)))> {
     std::cout << "reg apply" << std::endl;
 
-    auto addr_sorted = sort::tuple_sort<sort::min>(std::make_tuple(op, ops...));
     // if there's a write and read for the same register old read
     //   value will be returned
 
