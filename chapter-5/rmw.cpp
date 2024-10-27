@@ -345,7 +345,7 @@ constexpr auto to_tuple(T const& t) {
 
 namespace detail {
 template <typename T, typename ...Ts, std::size_t ...Idx>
-constexpr auto get_rwm_mask_helper (std::tuple<T, Ts...> const& t, std::index_sequence<Idx...>) -> typename T::value_type {
+constexpr auto get_rwm_mask_helper (std::tuple<T, Ts...> const& t, std::index_sequence<Idx...>) -> typename T::value_type_r {
     return ((std::get<Idx>(t).access_type == ros::AccessType::RW ? std::get<Idx>(t).mask : 0) | ...);
 };
 
@@ -371,19 +371,20 @@ constexpr T get_write_mask (std::tuple<Ts...> const& tup) {
 }
 }
 
-template <typename Reg, detail::msb msb, detail::lsb lsb, AccessType AT>
+template <typename Reg, detail::msb msb, detail::lsb lsb, AccessType AT, std::integral vt = typename Reg::value_type>
 requires FieldSelectable<typename Reg::value_type, msb, lsb>
 struct field {
-    using value_type = typename Reg::value_type;
+    using value_type_r = typename Reg::value_type;
+    using value_type = vt;
     using reg = Reg;
     using bus = typename Reg::bus;
     using length = std::integral_constant<unsigned, msb.value - lsb.value>;
 
     static constexpr AccessType access_type = AT;
 
-    static constexpr value_type mask = []() {
+    static constexpr value_type_r mask = []() {
         if (msb.value != lsb.value) {
-            if (msb.value == std::numeric_limits<value_type>::digits-1) {
+            if (msb.value == std::numeric_limits<value_type_r>::digits-1) {
                 return ~((1u << lsb.value) - 1);
             } else {
                 return ((1u << msb.value) - 1) & ~((1u << lsb.value) - 1);
@@ -455,15 +456,11 @@ struct field {
         return ros::detail::field_assignment_invocable<F, field, Field0, Fields...>{f};
     }
 
-    static constexpr value_type update (value_type old_value, value_type new_value) {
-        return (old_value & ~mask) | (new_value & mask);
-    }
-
-    static constexpr value_type to_reg (value_type reg_value, value_type value) {
+    static constexpr value_type_r to_reg (value_type_r reg_value, value_type value) {
         return (reg_value & ~mask) | (value << lsb.value) & mask;
     }
 
-    static constexpr value_type to_field (value_type value) {
+    static constexpr value_type to_field (value_type_r value) {
         return (value & mask) >> lsb.value;
     }
 
@@ -586,8 +583,8 @@ struct register_read {
 template <typename T>
 constexpr bool is_field_v = false;
 
-template <typename Reg, detail::msb msb, detail::lsb lsb, AccessType AT>
-constexpr bool is_field_v<field<Reg, msb, lsb, AT>> = true;
+template <typename Reg, detail::msb msb, detail::lsb lsb, AccessType AT, std::integral vt>
+constexpr bool is_field_v<field<Reg, msb, lsb, AT, vt>> = true;
 
 
 // template <typename ...Ts>
@@ -944,7 +941,7 @@ void apply() {};
 template<typename Op, typename ...Ops>
 requires detail::ApplicableFieldOperations<Op, Ops...>
 auto apply(Op op, Ops ...ops) -> return_reads_t<decltype(filter::tuple_filter<is_field_read>(std::make_tuple(op, ops...)))> {
-    using value_type = typename Op::type::value_type;
+    using value_type = typename Op::type::value_type_r;
     using Reg = typename Op::type::reg;
     using bus = typename Reg::bus;
 
@@ -1066,6 +1063,11 @@ struct mmio_bus : ros::bus {
 using namespace ros::literals;
 
 struct my_reg : ros::reg<my_reg, uint32_t, mmio_bus, 0x2000> {
+    enum class FieldState : uint8_t {
+        ON,
+        OFF
+    };
+
     ros::field<my_reg, 4_msb, 0_lsb, ros::AccessType::RW> field0;
     ros::field<my_reg, 12_msb, 4_lsb, ros::AccessType::RW> field1;
     ros::field<my_reg, 28_msb, 12_lsb, ros::AccessType::RW> field2;
