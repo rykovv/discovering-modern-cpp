@@ -48,11 +48,13 @@ struct unwrap_enum<T, typename std::enable_if_t<std::is_enum_v<T>>> {
 template <typename T>
 using unwrap_enum_t = typename unwrap_enum<T>::type;
 
+template <typename T>
+concept derivable_unsigned_integral = std::unsigned_integral<unwrap_enum_t<T>>;
+
 template <typename T, detail::msb msb, detail::lsb lsb>
-concept FieldSelectable = requires {
-    requires std::unsigned_integral<unwrap_enum_t<T>>; 
-} &&
-(
+concept FieldSelectable = 
+(    derivable_unsigned_integral<T>
+) && (
     msb.value <= std::numeric_limits<T>::digits-1 &&
     lsb.value <= std::numeric_limits<T>::digits-1
 ) && (
