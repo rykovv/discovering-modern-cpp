@@ -25,11 +25,32 @@ template <Lsb LsbT, LsbT val>
 struct lsb {
     static constexpr LsbT value = val;
 };
+
+template <typename T>
+concept Addr = std::unsigned_integral<T>;
+
+template <Addr AddrT, AddrT val>
+struct addr {
+    static constexpr AddrT value = val;
+};
 }
+
+template <typename T, typename enable = void>
+struct unwrap_enum {
+    using type = T;
+};
+
+template <typename T>
+struct unwrap_enum<T, typename std::enable_if_t<std::is_enum_v<T>>> {
+    using type = std::underlying_type_t<T>;
+};
+
+template <typename T>
+using unwrap_enum_t = typename unwrap_enum<T>::type;
 
 template <typename T, detail::msb msb, detail::lsb lsb>
 concept FieldSelectable = requires {
-    requires std::unsigned_integral<T>; 
+    requires std::unsigned_integral<unwrap_enum_t<T>>; 
 } &&
 (
     msb.value <= std::numeric_limits<T>::digits-1 &&
@@ -37,6 +58,9 @@ concept FieldSelectable = requires {
 ) && (
     msb.value >= lsb.value
 );
+
+template <typename T>
+concept FieldType = std::integral<T> || std::is_enum_v<T>;
 
 namespace detail {
 
@@ -104,9 +128,14 @@ requires HexadecimalNumber<Char0, Char1, Chars...>
 }
 }
 
-enum class AccessType {
+enum class access_type {
+    NA,
     RO,
-    RW
+    WO,
+    RW,
+    RW_0C,
+    RW_1C,
+    RW_1S
 };
 
 namespace error {
@@ -121,7 +150,8 @@ namespace error {
     };
     template <typename Field, typename T = typename Field::value_type>
     constexpr FieldErrorHandler<Field> clampHandler = [](T v) -> T {
-        std::cout << "clamp handler with " << v << std::endl;
+        using value_type_r = typename Field::value_type_r;
+        std::cout << "clamp handler with " << static_cast<value_type_r>(v) << std::endl;
         return T{((1 << Field::length::value) - 1)};
     };
     template <typename Field>
@@ -140,9 +170,6 @@ namespace error {
 // [TODO]: Add disjoint field support
 
 namespace detail {
-template <typename T>
-concept FieldType = std::integral<T>;
-
 template <FieldType T, T val>
 struct field_value {
     static constexpr T value = val;
@@ -190,13 +217,13 @@ struct unsafe_field_operations_handler {
     using value_type = typename Field::value_type;
 
     constexpr auto operator= (auto const& rhs) const -> field_assignment_unsafe<Field> {
-        static_assert(Field::access_type != AccessType::RO, "cannot write read-only field");
+        static_assert(Field::access_type != access_type::RO, "cannot write read-only field");
         // safe static_case because assignment overload checked type and width validity
         return ros::detail::field_assignment_unsafe<Field>{static_cast<value_type>(rhs)};
     }
 
     constexpr auto operator= (auto && rhs) const -> field_assignment_unsafe<Field> {
-        static_assert(Field::access_type != AccessType::RO, "cannot write read-only field");
+        static_assert(Field::access_type != access_type::RO, "cannot write read-only field");
         // safe static_case because assignment overload checked type and width validity
         return field_assignment_unsafe<Field>{static_cast<value_type>(rhs)};
     }
@@ -346,7 +373,7 @@ constexpr auto to_tuple(T const& t) {
 namespace detail {
 template <typename T, typename ...Ts, std::size_t ...Idx>
 constexpr auto get_rwm_mask_helper (std::tuple<T, Ts...> const& t, std::index_sequence<Idx...>) -> typename T::value_type_r {
-    return ((std::get<Idx>(t).access_type == ros::AccessType::RW ? std::get<Idx>(t).mask : 0) | ...);
+    return ((std::get<Idx>(t).access_type == ros::access_type::RW ? std::get<Idx>(t).mask : 0) | ...);
 };
 
 template <typename Reg>
@@ -371,16 +398,18 @@ constexpr T get_write_mask (std::tuple<Ts...> const& tup) {
 }
 }
 
-template <typename Reg, detail::msb msb, detail::lsb lsb, AccessType AT, std::integral vt = typename Reg::value_type>
-requires FieldSelectable<typename Reg::value_type, msb, lsb>
+template <typename reg_derived, 
+          detail::msb msb, detail::lsb lsb, 
+          access_type at, 
+          FieldType value_type_f = typename reg_derived::value_type>
+requires FieldSelectable<value_type_f, msb, lsb>
 struct field {
-    using value_type_r = typename Reg::value_type;
-    using value_type = vt;
-    using reg = Reg;
-    using bus = typename Reg::bus;
+    using value_type_r = typename reg_derived::value_type;
+    using value_type = value_type_f;
+    using reg = reg_derived;
     using length = std::integral_constant<unsigned, msb.value - lsb.value>;
 
-    static constexpr AccessType access_type = AT;
+    static constexpr access_type access_type = at;
 
     static constexpr value_type_r mask = []() {
         if (msb.value != lsb.value) {
@@ -399,21 +428,27 @@ struct field {
     template <typename U, U val>
     requires (std::is_convertible_v<U, value_type>)
     constexpr auto operator= (detail::field_value<U, val>) const -> ros::detail::field_assignment_safe<field, val> {
-        static_assert(access_type != AccessType::RO, "cannot write read-only field");
+        static_assert(access_type != access_type::RO, "cannot write read-only field");
         static_assert(val <= (mask >> lsb.value), "assigned value greater than allowed");
         return ros::detail::field_assignment_safe<field, val>{};
     }
 
+    // constexpr auto operator= (FieldType auto val) const -> ros::detail::field_assignment_safe_runtime<field> {
+    //     static_assert(access_type != access_type::RO, "cannot write read-only field");
+    //     static_assert(val <= (mask >> lsb.value), "assigned value greater than allowed");
+    //     return ros::detail::field_assignment_safe_runtime<field>{val};
+    // }
+
     // field-to-field assignment needs elaboration
     // constexpr auto operator= (auto const& rhs) -> ros::detail::field_assignment_safe<field, decltype(rhs)::value> {
-    //     static_assert(access_type != AccessType::RO, "cannot write read-only field");
+    //     static_assert(access_type != access_type::RO, "cannot write read-only field");
     //     using rhs_type = std::remove_reference_t<decltype(rhs)>;
     //     static_assert(rhs_type::length <= msb - lsb, "larger field cannot be safely assigned to a narrower one");
     //     return ros::detail::field_assignment_safe<field, rhs.value>{};
     // }
 
     // constexpr auto operator= (auto && rhs) -> ros::detail::field_assignment_safe<field, decltype(rhs)::value> {
-    //     static_assert(access_type != AccessType::RO, "cannot write read-only field");
+    //     static_assert(access_type != access_type::RO, "cannot write read-only field");
     //     using rhs_type = std::remove_reference_t<decltype(rhs)>;
     //     static_assert(rhs_type::length <= msb - lsb, "larger field cannot be safely assigned to a narrower one");
     //     return ros::detail::field_assignment_safe<field, rhs.value>{};
@@ -425,7 +460,7 @@ struct field {
               std::is_convertible_v<T, value_type> &&
               std::numeric_limits<T>::digits >= msb.value - lsb.value)
     constexpr auto operator= (T const& rhs) const -> ros::detail::field_assignment_safe_runtime<field> {
-        static_assert(access_type != AccessType::RO, "cannot write read-only field");
+        static_assert(access_type != access_type::RO, "cannot write read-only field");
         static_assert(std::numeric_limits<value_type>::digits >= std::numeric_limits<T>::digits, "Unsafe assignment. Assigned value type is too wide.");
 
         return ros::detail::field_assignment_safe_runtime<field>{check(rhs)};
@@ -436,10 +471,18 @@ struct field {
               std::is_convertible_v<T, value_type> &&
               std::numeric_limits<T>::digits >= msb.value - lsb.value)
     constexpr auto operator= (T && rhs) const -> ros::detail::field_assignment_safe_runtime<field> {
-        static_assert(access_type != AccessType::RO, "cannot write read-only field");
+        static_assert(access_type != access_type::RO, "cannot write read-only field");
         static_assert(std::numeric_limits<value_type>::digits >= std::numeric_limits<T>::digits, "Unsafe assignment. Assigned value type is too wide.");
         
         return ros::detail::field_assignment_safe_runtime<field>{check(rhs)};
+    }
+
+    template <typename EnumT>
+    requires (std::is_enum_v<EnumT>)
+    constexpr auto operator= (EnumT val) const -> ros::detail::field_assignment_safe_runtime<field> {
+        static_assert(access_type != access_type::RO, "cannot write read-only field");
+        // static_assert(static_cast<value_type_r>(val) <= (mask >> lsb.value), "assigned value greater than allowed");
+        return ros::detail::field_assignment_safe_runtime<field>{check(val)};
     }
 
     constexpr auto read() const -> ros::detail::field_read<field> {
@@ -457,16 +500,16 @@ struct field {
     }
 
     static constexpr value_type_r to_reg (value_type_r reg_value, value_type value) {
-        return (reg_value & ~mask) | (value << lsb.value) & mask;
+        return (reg_value & ~mask) | (static_cast<value_type_r>(value) << lsb.value) & mask;
     }
 
     static constexpr value_type to_field (value_type_r value) {
-        return (value & mask) >> lsb.value;
+        return (static_cast<value_type_r>(value) & mask) >> lsb.value;
     }
 
     static constexpr value_type check (value_type value) {
         value_type safe_val;
-        if (value <= mask >> lsb.value) {
+        if (static_cast<value_type_r>(value) <= mask >> lsb.value) {
             safe_val = value;
         } else {
             safe_val = ros::error::handle<field>(value);
@@ -479,7 +522,7 @@ struct field {
 };
 
 namespace detail {
-// template <typename Reg, unsigned msb, unsigned lsb, AccessType AT, typename Reg::value_type val>
+// template <typename Reg, unsigned msb, unsigned lsb, access_type AT, typename Reg::value_type val>
 template <typename Field>
 struct field_assignment {
     using type = Field;
@@ -583,8 +626,8 @@ struct register_read {
 template <typename T>
 constexpr bool is_field_v = false;
 
-template <typename Reg, detail::msb msb, detail::lsb lsb, AccessType AT, std::integral vt>
-constexpr bool is_field_v<field<Reg, msb, lsb, AT, vt>> = true;
+template <typename Reg, detail::msb msb, detail::lsb lsb, access_type AT, FieldType field_t>
+constexpr bool is_field_v<field<Reg, msb, lsb, AT, field_t>> = true;
 
 
 // template <typename ...Ts>
@@ -616,12 +659,12 @@ struct bus {
     static void write(std::tuple<AdjacentAddrs...> addrs, std::tuple<ValueTypes...> values);
 };
 
-template <typename r, detail::RegisterType T, typename b, std::size_t addr>
+template <typename r, detail::RegisterType T, detail::addr addr, typename b>
 struct reg {
     using Reg = r;
     using value_type = T;
     using bus = b;
-    using address = std::integral_constant<std::size_t, addr>;
+    using address = std::integral_constant<std::size_t, addr.value>;
 
     static constexpr value_type layout = detail::get_rmw_mask(Reg{});
 
@@ -633,8 +676,8 @@ struct reg {
 template <typename T>
 constexpr bool is_reg_v = false;
 
-template <typename r, typename T, typename b, std::size_t addr>
-constexpr bool is_reg_v<reg<r, T, b, addr>> = true;
+template <typename r, typename T, typename b, detail::addr addr>
+constexpr bool is_reg_v<reg<r, T, addr, b>> = true;
 
 
 namespace literals {
@@ -670,6 +713,13 @@ constexpr auto operator""_lsb () {
     constexpr unsigned new_value = ros::detail::to_unsigned_const<unsigned, Chars...>();
 
     return detail::lsb<unsigned, new_value>{};
+}
+
+template <char ...Chars>
+constexpr auto operator""_addr () {
+    constexpr std::size_t new_value = ros::detail::to_unsigned_const<std::size_t, Chars...>();
+
+    return detail::addr<std::size_t, new_value>{};
 }
 }
 
@@ -1017,7 +1067,7 @@ auto apply(Op op, Ops ...ops) {// -> return_reads_t<decltype(filter::tuple_filte
 }
 
 
-template <typename T, typename Reg, unsigned msb, unsigned lsb, ros::AccessType AT>
+template <typename T, typename Reg, unsigned msb, unsigned lsb, ros::access_type AT>
 concept SafeAssignable = requires {
     requires std::unsigned_integral<T>;
 } && ( 
@@ -1025,7 +1075,7 @@ concept SafeAssignable = requires {
     std::numeric_limits<T>::digits >= msb - lsb
 );
 
-template <typename T, typename Reg, detail::msb msb, detail::lsb lsb, ros::AccessType AT>
+template <typename T, typename Reg, detail::msb msb, detail::lsb lsb, ros::access_type AT>
 requires SafeAssignable<T, Reg, msb, lsb, AT>
 constexpr T& operator<= (T & lhs, ros::field<Reg, msb, lsb, AT> const& rhs) {
     auto [val] = apply(ros::detail::field_read<ros::field<Reg, msb, lsb, AT>>{});
@@ -1062,17 +1112,17 @@ struct mmio_bus : ros::bus {
 
 using namespace ros::literals;
 
-struct my_reg : ros::reg<my_reg, uint32_t, mmio_bus, 0x2000> {
+struct my_reg : ros::reg<my_reg, uint32_t, 0x2000_addr, mmio_bus> {
     enum class FieldState : uint8_t {
         ON,
         OFF
     };
 
-    ros::field<my_reg, 4_msb, 0_lsb, ros::AccessType::RW> field0;
-    ros::field<my_reg, 12_msb, 4_lsb, ros::AccessType::RW> field1;
-    ros::field<my_reg, 28_msb, 12_lsb, ros::AccessType::RW> field2;
-    ros::field<my_reg, 31_msb, 28_lsb, ros::AccessType::RO> field3;
-    // ros::disjoint_field<my_reg, ros::AccessType::RW,
+    ros::field<my_reg, 4_msb, 0_lsb, ros::access_type::RW> field0;
+    ros::field<my_reg, 12_msb, 4_lsb, ros::access_type::RW> field1;
+    ros::field<my_reg, 28_msb, 12_lsb, ros::access_type::RW> field2;
+    ros::field<my_reg, 31_msb, 28_lsb, ros::access_type::RW, FieldState> field3;
+    // ros::disjoint_field<my_reg, ros::access_type::RW,
     //     ros::field_segment<2_msb, 0_lsb>,
     //     ros::field_segment<5_msb, 4_lsb>
     //     > dj_field;
@@ -1080,12 +1130,20 @@ struct my_reg : ros::reg<my_reg, uint32_t, mmio_bus, 0x2000> {
 
 
 int main() {
+    // static_assert(std::is_enum_v<unsigned int>);
+    // static_assert(std::is_integral_v<unsigned int>);
+    // auto a = ros::unwrap_enum_t<my_reg::FieldState>{};
+    // std::cout << typeid(a).name() << std::endl;
+    // static_assert(std::is_same_v<ros::unwrap_enum_t<unsigned int>, unsigned int>);
+    // static_assert(std::is_same_v<ros::unwrap_enum_t<my_reg::FieldState>, uint8_t>);
+    // static_assert(std::is_integral_v<ros::unwrap_enum_t<unsigned int>>);
     uint32_t t = 17;
 
     // multi-field write/read syntax
     auto [f0, f1] = apply(r0.field0 = 0xf_f,
                           r0.field1.unsafe = 13,
                           r0.field2 = t,
+                          r0.field3 = my_reg::FieldState::OFF,
                           r0.field0.read(),
                           r0.field2.read());
 
