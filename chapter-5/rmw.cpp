@@ -128,14 +128,16 @@ requires HexadecimalNumber<Char0, Char1, Chars...>
 }
 }
 
-enum class access_type {
-    NA,
-    RO,
-    WO,
-    RW,
-    RW_0C,
-    RW_1C,
-    RW_1S
+enum class access_type : uint8_t {
+    NA    = 0b000'00000,
+    RO    = 0b000'00001,
+    WO    = 0b000'00010,
+    RW    = 0b000'00011,
+    RW_0C = 0b000'00111,
+    RW_1C = 0b000'01011,
+    RW_1S = 0b000'10011,
+    R = RO,
+    W = WO
 };
 
 namespace error {
@@ -428,7 +430,7 @@ struct field {
     template <typename U, U val>
     requires (std::is_convertible_v<U, value_type>)
     constexpr auto operator= (detail::field_value<U, val>) const -> ros::detail::field_assignment_safe<field, val> {
-        static_assert(access_type != access_type::RO, "cannot write read-only field");
+        static_assert((static_cast<value_type_r>(access_type) & static_cast<value_type_r>(access_type::W)) != 0, "cannot write read-only field");
         static_assert(val <= (mask >> lsb.value), "assigned value greater than allowed");
         return ros::detail::field_assignment_safe<field, val>{};
     }
@@ -460,7 +462,7 @@ struct field {
               std::is_convertible_v<T, value_type> &&
               std::numeric_limits<T>::digits >= msb.value - lsb.value)
     constexpr auto operator= (T const& rhs) const -> ros::detail::field_assignment_safe_runtime<field> {
-        static_assert(access_type != access_type::RO, "cannot write read-only field");
+        static_assert((static_cast<value_type_r>(access_type) & static_cast<value_type_r>(access_type::W)) != 0, "cannot write read-only field");
         static_assert(std::numeric_limits<value_type>::digits >= std::numeric_limits<T>::digits, "Unsafe assignment. Assigned value type is too wide.");
 
         return ros::detail::field_assignment_safe_runtime<field>{check(rhs)};
@@ -471,7 +473,7 @@ struct field {
               std::is_convertible_v<T, value_type> &&
               std::numeric_limits<T>::digits >= msb.value - lsb.value)
     constexpr auto operator= (T && rhs) const -> ros::detail::field_assignment_safe_runtime<field> {
-        static_assert(access_type != access_type::RO, "cannot write read-only field");
+        static_assert((static_cast<value_type_r>(access_type) & static_cast<value_type_r>(access_type::W)) != 0, "cannot write read-only field");
         static_assert(std::numeric_limits<value_type>::digits >= std::numeric_limits<T>::digits, "Unsafe assignment. Assigned value type is too wide.");
         
         return ros::detail::field_assignment_safe_runtime<field>{check(rhs)};
@@ -480,22 +482,25 @@ struct field {
     template <typename EnumT>
     requires (std::is_enum_v<EnumT>)
     constexpr auto operator= (EnumT val) const -> ros::detail::field_assignment_safe_runtime<field> {
-        static_assert(access_type != access_type::RO, "cannot write read-only field");
+        static_assert((static_cast<value_type_r>(access_type) & static_cast<value_type_r>(access_type::W)) != 0, "cannot write read-only field");
         // static_assert(static_cast<value_type_r>(val) <= (mask >> lsb.value), "assigned value greater than allowed");
         return ros::detail::field_assignment_safe_runtime<field>{check(val)};
     }
 
     constexpr auto read() const -> ros::detail::field_read<field> {
+        static_assert((static_cast<value_type_r>(access_type) & static_cast<value_type_r>(access_type::R)) != 0, "cannot read write-only or NA field");
         return ros::detail::field_read<field>{};
     }
 
     constexpr auto operator() (std::invocable<value_type> auto f) const -> ros::detail::field_assignment_invocable<decltype(f), field, field> {
+        static_assert((static_cast<value_type_r>(access_type) & static_cast<value_type_r>(access_type::RW)) != 0, "cannot read and write read/write-only or NA field");
         return ros::detail::field_assignment_invocable<decltype(f), field, field>{f};
     }
 
     template <typename F, typename Field0, typename... Fields>
     requires std::invocable<F, typename Field0::value_type, typename Fields::value_type...>
     constexpr auto operator() (F f, Field0 f0, Fields... fs) const -> ros::detail::field_assignment_invocable<F, field, Field0, Fields...> {
+        static_assert((static_cast<value_type_r>(access_type) & static_cast<value_type_r>(access_type::RW)) != 0, "cannot read and write read/write-only or NA field");
         return ros::detail::field_assignment_invocable<F, field, Field0, Fields...>{f};
     }
 
