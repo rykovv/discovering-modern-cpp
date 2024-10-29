@@ -156,7 +156,7 @@ namespace error {
     constexpr FieldErrorHandler<Field> clampHandler = [](T v) -> T {
         using value_type_r = typename Field::value_type_r;
         std::cout << "clamp handler with " << static_cast<value_type_r>(v) << std::endl;
-        return T{((1 << Field::length::value) - 1)};
+        return T{((1 << Field::length) - 1)};
     };
     template <typename Field>
     constexpr FieldErrorHandler<Field> handle = clampHandler<Field>;
@@ -312,16 +312,16 @@ struct UniversalType {
 };
 
 template<typename T>
-consteval auto MemberCounter(auto ...Members) {
+consteval auto get_struct_size(auto ...Members) {
     if constexpr (requires { T{ Members... }; } == false) {
-        return sizeof...(Members) - 2;
+        return sizeof...(Members) - 2; // id and unsafe members
     } else {
-        return MemberCounter<T>(Members..., UniversalType{});
+        return get_struct_size<T>(Members..., UniversalType{});
     }
 }
 
 template <typename T>
-constexpr auto forwarder(T && t) {
+constexpr auto forward(T && t) {
     return std::forward<T>(t);
 }
 
@@ -338,7 +338,7 @@ struct to_tuple_helper<T, 0> {
 template <typename T>
 struct to_tuple_helper<T, 1> {
     constexpr auto operator() (T const& t) const {
-        auto&& [f0] = forwarder(t);
+        auto&& [f0] = forward(t);
         return std::make_tuple(f0);
     }
 };
@@ -346,7 +346,7 @@ struct to_tuple_helper<T, 1> {
 template <typename T>
 struct to_tuple_helper<T, 2> {
     constexpr auto operator() (T const& t) const {
-        auto&& [f0, f1] = forwarder(t);
+        auto&& [f0, f1] = forward(t);
         return std::make_tuple(f0, f1);
     }
 };
@@ -354,7 +354,7 @@ struct to_tuple_helper<T, 2> {
 template <typename T>
 struct to_tuple_helper<T, 3> {
     constexpr auto operator() (T const& t) const {
-        auto&& [f0, f1, f2] = forwarder(t);
+        auto&& [f0, f1, f2] = forward(t);
         return std::make_tuple(f0, f1, f2);
     }
 };
@@ -362,28 +362,38 @@ struct to_tuple_helper<T, 3> {
 template <typename T>
 struct to_tuple_helper<T, 4> {
     constexpr auto operator() (T const& t) const {
-        auto&& [f0, f1, f2, f3] = forwarder(t);
+        auto&& [f0, f1, f2, f3] = forward(t);
         return std::make_tuple(f0, f1, f2, f3);
     }
 };
 
 template <typename T>
 constexpr auto to_tuple(T const& t) {
-    const unsigned ssize = MemberCounter<T>();
-    return to_tuple_helper<T, ssize>{}(t);
+    constexpr std::size_t ss = get_struct_size<T>();
+    return to_tuple_helper<T, ss>{}(t);
 }
 }
 
 namespace detail {
 template <typename T, typename ...Ts, std::size_t ...Idx>
 constexpr auto get_rwm_mask_helper (std::tuple<T, Ts...> const& t, std::index_sequence<Idx...>) -> typename T::value_type_r {
-    return ((std::get<Idx>(t).access_type == ros::access_type::RW ? std::get<Idx>(t).mask : 0) | ...);
+    return (
+        (
+            (
+                static_cast<std::remove_cvref_t<decltype(std::get<Idx>(t))>::value_type_r>(std::get<Idx>(t).access_type) & 
+                static_cast<std::remove_cvref_t<decltype(std::get<Idx>(t))>::value_type_r>(ros::access_type::R)
+            ) ? 
+            std::get<Idx>(t).mask : 0
+        ) | ...
+    );
 };
 
-template <typename Reg>
-constexpr typename Reg::value_type get_rmw_mask (Reg const& r) {
+template <typename reg>
+constexpr typename reg::value_type get_rmw_mask (reg const& r) {
     auto tup = reflect::to_tuple(r);
-    return get_rwm_mask_helper(tup, std::make_index_sequence<reflect::MemberCounter<Reg>()>{});
+    constexpr std::size_t tup_size = std::tuple_size_v<decltype(tup)>;
+    return get_rwm_mask_helper(tup, std::make_index_sequence<tup_size>{});
+    // return get_rwm_mask_helper(tup, std::make_index_sequence<reflect::get_struct_size<Reg>()>{});
 }
 
 template <typename Tuple, std::size_t ...Idx>
@@ -411,9 +421,12 @@ struct field {
     using value_type_r = typename reg_derived::value_type;
     using value_type = value_type_f;
     using reg = reg_derived;
-    using length = std::integral_constant<unsigned, msb.value - lsb.value>;
 
     static constexpr access_type access_type = at;
+
+    static constexpr uint8_t length = []() {
+        return msb.value == lsb.value ? 1 : msb.value - lsb.value;
+    }();
 
     static constexpr value_type_r mask = []() {
         if (msb.value != lsb.value) {
@@ -432,7 +445,10 @@ struct field {
     template <typename U, U val>
     requires (std::is_convertible_v<U, value_type>)
     constexpr auto operator= (detail::field_value<U, val>) const -> ros::detail::field_assignment_safe<field, val> {
-        static_assert((static_cast<value_type_r>(access_type) & static_cast<value_type_r>(access_type::W)) != 0, "cannot write read-only field");
+        static_assert((
+            static_cast<value_type_r>(access_type) & 
+            static_cast<value_type_r>(access_type::W)) != 0, 
+            "cannot write read-only or NA field");
         static_assert(val <= (mask >> lsb.value), "assigned value greater than allowed");
         return ros::detail::field_assignment_safe<field, val>{};
     }
@@ -467,7 +483,7 @@ struct field {
         static_assert((static_cast<value_type_r>(access_type) & static_cast<value_type_r>(access_type::W)) != 0, "cannot write read-only field");
         static_assert(std::numeric_limits<value_type>::digits >= std::numeric_limits<T>::digits, "Unsafe assignment. Assigned value type is too wide.");
 
-        return ros::detail::field_assignment_safe_runtime<field>{check(rhs)};
+        return ros::detail::field_assignment_safe_runtime<field>{runtime_check(rhs)};
     }
 
     template <typename T>
@@ -478,7 +494,7 @@ struct field {
         static_assert((static_cast<value_type_r>(access_type) & static_cast<value_type_r>(access_type::W)) != 0, "cannot write read-only field");
         static_assert(std::numeric_limits<value_type>::digits >= std::numeric_limits<T>::digits, "Unsafe assignment. Assigned value type is too wide.");
         
-        return ros::detail::field_assignment_safe_runtime<field>{check(rhs)};
+        return ros::detail::field_assignment_safe_runtime<field>{runtime_check(rhs)};
     }
 
     template <typename EnumT>
@@ -486,7 +502,7 @@ struct field {
     constexpr auto operator= (EnumT val) const -> ros::detail::field_assignment_safe_runtime<field> {
         static_assert((static_cast<value_type_r>(access_type) & static_cast<value_type_r>(access_type::W)) != 0, "cannot write read-only field");
         // static_assert(static_cast<value_type_r>(val) <= (mask >> lsb.value), "assigned value greater than allowed");
-        return ros::detail::field_assignment_safe_runtime<field>{check(val)};
+        return ros::detail::field_assignment_safe_runtime<field>{runtime_check(val)};
     }
 
     constexpr auto read() const -> ros::detail::field_read<field> {
@@ -514,7 +530,7 @@ struct field {
         return (static_cast<value_type_r>(value) & mask) >> lsb.value;
     }
 
-    static constexpr value_type check (value_type value) {
+    static constexpr value_type runtime_check (value_type value) {
         value_type safe_val;
         if (static_cast<value_type_r>(value) <= mask >> lsb.value) {
             safe_val = value;
@@ -666,17 +682,17 @@ struct bus {
     static void write(std::tuple<AdjacentAddrs...> addrs, std::tuple<ValueTypes...> values);
 };
 
-template <typename r, detail::RegisterType T, detail::addr addr, typename b>
+template <typename reg_derived, detail::RegisterType T, detail::addr addr, typename bus_t>
 struct reg {
-    using Reg = r;
+    using reg_der = reg_derived;
     using value_type = T;
-    using bus = b;
+    using bus = bus_t;
     using address = std::integral_constant<std::size_t, addr.value>;
 
-    static constexpr value_type layout = detail::get_rmw_mask(Reg{});
+    static constexpr value_type layout = detail::get_rmw_mask(reg_der{});
 
     static constexpr ros::detail::unsafe_register_operations_handler<reg> unsafe{};
-    static constexpr ros::detail::safe_register_operations_handler<reg> full{};
+    static constexpr ros::detail::safe_register_operations_handler<reg> id{};
 };
 
 
@@ -897,7 +913,7 @@ template <typename T, typename TupleInvocableWrites, std::size_t... Idx>
 constexpr T get_invocable_write_value_helper(T value, TupleInvocableWrites tup, std::index_sequence<Idx...>) {
     return (std::tuple_element_t<Idx, TupleInvocableWrites>::type::to_reg( // wrap back everything to reg value
         T{0}, // pass in zero, final value will assigned with a compound mask
-        std::tuple_element_t<Idx, TupleInvocableWrites>::type::check( // safety check
+        std::tuple_element_t<Idx, TupleInvocableWrites>::type::runtime_check( // safety check
             get_invocable_write_fields_helper( // make invocable call with each field value
                 value, // original reg value
                 std::get<Idx>(tup), // invocable lambda wrapper
@@ -999,8 +1015,10 @@ template<typename Op, typename ...Ops>
 requires detail::ApplicableFieldOperations<Op, Ops...>
 auto apply(Op op, Ops ...ops) -> return_reads_t<decltype(filter::tuple_filter<is_field_read>(std::make_tuple(op, ops...)))> {
     using value_type = typename Op::type::value_type_r;
-    using Reg = typename Op::type::reg;
-    using bus = typename Reg::bus;
+    using reg = typename Op::type::reg;
+    using bus = typename reg::bus;
+
+    constexpr value_type rmw_mask = reg::layout;
 
     auto operations = std::make_tuple(op, ops...);
     value_type value{};
@@ -1022,14 +1040,13 @@ auto apply(Op op, Ops ...ops) -> return_reads_t<decltype(filter::tuple_filter<is
     constexpr value_type invocable_write_mask = detail::get_write_mask<value_type>(invocable_writes);
     constexpr value_type write_mask = comptime_write_mask | runtime_write_mask | invocable_write_mask;
 
-    constexpr value_type rmw_mask = detail::get_rmw_mask(Reg{});
 
     if constexpr (write_mask != 0) {
         constexpr bool is_partial_write = ((rmw_mask & write_mask) != rmw_mask);
         constexpr bool has_invocable_writes = std::tuple_size_v<decltype(invocable_writes)> > 0;
 
         if constexpr (is_partial_write || has_invocable_writes) {
-            value = bus::template read<value_type>(Reg::address::value);
+            value = bus::template read<value_type>(reg::address::value);
         }
 
         // evaluate invocables at the beginning
@@ -1043,10 +1060,10 @@ auto apply(Op op, Ops ...ops) -> return_reads_t<decltype(filter::tuple_filter<is
         // runtime
         value = detail::get_write_value(value, runtime_write_mask, runtime_writes);
 
-        bus::write(value, Reg::address::value);
+        bus::write(value, reg::address::value);
     } else /* if (return_reads) */ {
         // implicit because if there're no writes, the only possible op is read
-        value = bus::template read<value_type>(Reg::address::value);
+        value = bus::template read<value_type>(reg::address::value);
     }
 
     auto get_read_fields = [&value]<typename ...Ts>(std::tuple<Ts...> reads) /* -> ... */ {
@@ -1170,11 +1187,11 @@ int main() {
     // [TODO]: Add register operations support
     // write whole reg
     // checks attempts to write RO fields
-    apply(r0.full([](auto old_r0) {
+    apply(r0.id([](auto old_r0) {
         return old_r0 | 0x3;
     }));
-    apply(r0.full = 0xf0000000,
-          r0.full.read());
+    apply(r0.id = 0xf0000000,
+          r0.id.read());
     // read while reg
     // uint32_t value;
     // apply(r0.read(value));
