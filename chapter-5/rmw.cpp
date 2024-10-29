@@ -1021,6 +1021,7 @@ auto apply(Op op, Ops ...ops) -> return_reads_t<decltype(filter::tuple_filter<is
     constexpr value_type rmw_mask = reg::layout;
 
     auto operations = std::make_tuple(op, ops...);
+
     value_type value{};
 
     // constexpr bool return_reads = std::disjunction_v<std::is_same<Op, ros::detail::field_read<typename Op::type>>, std::is_same<Ops, ros::detail::field_read<typename Ops::type>>...>;
@@ -1028,10 +1029,10 @@ auto apply(Op op, Ops ...ops) -> return_reads_t<decltype(filter::tuple_filter<is
     // compile-time writes
     auto safe_writes = filter::tuple_filter<is_field_assignment_safe>(operations);
     // runtime writes
-    auto safe_runtime_writes = filter::tuple_filter<is_field_assignment_safe_runtime>(operations);
+    auto safe_writes_runtime = filter::tuple_filter<is_field_assignment_safe_runtime>(operations);
     auto unsafe_writes = filter::tuple_filter<is_field_assignment_unsafe>(operations);
 
-    auto runtime_writes = std::tuple_cat(safe_runtime_writes, unsafe_writes);
+    auto runtime_writes = std::tuple_cat(safe_writes_runtime, unsafe_writes);
 
     auto invocable_writes = filter::tuple_filter<is_field_assignment_invocable>(operations);
 
@@ -1039,7 +1040,6 @@ auto apply(Op op, Ops ...ops) -> return_reads_t<decltype(filter::tuple_filter<is
     constexpr value_type runtime_write_mask = detail::get_write_mask<value_type>(runtime_writes);
     constexpr value_type invocable_write_mask = detail::get_write_mask<value_type>(invocable_writes);
     constexpr value_type write_mask = comptime_write_mask | runtime_write_mask | invocable_write_mask;
-
 
     if constexpr (write_mask != 0) {
         constexpr bool is_partial_write = ((rmw_mask & write_mask) != rmw_mask);
