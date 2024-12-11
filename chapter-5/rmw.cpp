@@ -235,6 +235,7 @@ struct unsafe_field_operations_handler {
 
 template <typename Register>
 struct safe_register_operations_handler {
+    using reg = Register;
     using value_type = typename Register::value_type;
 
     constexpr auto read() const -> ros::detail::register_read<Register> {
@@ -282,10 +283,10 @@ struct safe_register_operations_handler {
         return ros::detail::register_assignment_invocable<decltype(f), Register, Register>{f};
     }
 
-    template <typename F, typename Register0, typename... Registers>
-    requires std::invocable<F, typename Register0::value_type, typename Registers::value_type...>
-    constexpr auto operator() (F f, Register0 f0, Registers... fs) const -> ros::detail::register_assignment_invocable<F, Register, Register0, Registers...> {
-        return ros::detail::register_assignment_invocable<F, Register, Register0, Registers...>{f};
+    template <typename F, typename RegOpsHandlerT0, typename... RegOpsHandlerTs>
+    requires std::invocable<F, typename RegOpsHandlerT0::reg::value_type, typename RegOpsHandlerTs::reg::value_type...>
+    constexpr auto operator() (F f, RegOpsHandlerT0 rh0, RegOpsHandlerTs... rhs) const -> ros::detail::register_assignment_invocable<F, Register, typename RegOpsHandlerT0::reg, typename RegOpsHandlerTs::reg...> {
+        return ros::detail::register_assignment_invocable<F, Register, typename RegOpsHandlerT0::reg, typename RegOpsHandlerTs::reg...>{f};
     }
 };
 
@@ -314,7 +315,7 @@ struct UniversalType {
 template<typename T>
 consteval auto get_struct_size(auto ...Members) {
     if constexpr (requires { T{ Members... }; } == false) {
-        return sizeof...(Members) - 2; // id and unsafe members
+        return sizeof...(Members) - 2; // self and unsafe members
     } else {
         return get_struct_size<T>(Members..., UniversalType{});
     }
@@ -692,7 +693,7 @@ struct reg {
     static constexpr value_type layout = detail::get_rmw_mask(reg_der{});
 
     static constexpr ros::detail::unsafe_register_operations_handler<reg> unsafe{};
-    static constexpr ros::detail::safe_register_operations_handler<reg> id{};
+    static constexpr ros::detail::safe_register_operations_handler<reg> self{};
 };
 
 
@@ -997,19 +998,19 @@ struct one_register_assignment_per_apply<Op, Ops...> {
 template <typename... Ops>
 constexpr bool one_register_assignment_per_apply_v = one_register_assignment_per_apply<Ops...>::value;
 
-template<typename ...Ops>
-concept OneRegisterAssignmentPerApply = one_register_assignment_per_apply_v<Ops...>;
+// template<typename ...Ops>
+// concept OneRegisterAssignmentPerApply = one_register_assignment_per_apply_v<Ops...>;
 
 template<typename ...Ops>
 concept RegisterOperations = (is_reg_v<typename Ops::type> && ...);
 
 template<typename Op, typename ...Ops>
-concept ApplicableRegisterOperations = 
-    RegisterOperations<Op, Ops...> && 
-    OneRegisterAssignmentPerApply<Op, Ops...>;
+concept ApplicableRegisterOperations = RegisterOperations<Op, Ops...>;
+
 }
 
-void apply() {};
+// default overload
+void apply(...) {};
 
 template<typename Op, typename ...Ops>
 requires detail::ApplicableFieldOperations<Op, Ops...>
@@ -1079,6 +1080,21 @@ requires detail::ApplicableRegisterOperations<Op, Ops...>
 auto apply(Op op, Ops ...ops) {// -> return_reads_t<decltype(filter::tuple_filter<is_register_read>(std::make_tuple(op, ops...)))> {
     std::cout << "reg apply" << std::endl;
 
+    // write whole reg
+    // checks attempts to write RO fields
+
+    auto operations = std::make_tuple(op, ops...);
+
+    // compile-time writes
+    auto safe_writes = filter::tuple_filter<is_register_assignment_safe>(operations);
+    // runtime writes
+    auto safe_writes_runtime = filter::tuple_filter<is_field_assignment_safe_runtime>(operations);
+    auto unsafe_writes = filter::tuple_filter<is_field_assignment_unsafe>(operations);
+
+    auto runtime_writes = std::tuple_cat(safe_writes_runtime, unsafe_writes);
+
+    auto invocable_writes = filter::tuple_filter<is_field_assignment_invocable>(operations);
+
     // if there's a write and read for the same register old read
     //   value will be returned
 
@@ -1088,6 +1104,8 @@ auto apply(Op op, Ops ...ops) {// -> return_reads_t<decltype(filter::tuple_filte
     
     // second, cluster adjacent writes into separate tuples
     //   call write bundled for each tuple
+
+    // return reads if requiested
 }
 
 
@@ -1152,6 +1170,10 @@ struct my_reg : ros::reg<my_reg, uint32_t, 0x2000_addr, mmio_bus> {
     //     > dj_field;
 } r0;
 
+struct my_reg1 : ros::reg<my_reg, uint32_t, 0x2000_addr, mmio_bus> {
+    ros::field<my_reg, 31_msb, 0_lsb, ros::access_type::RW> field0;
+} r1;
+
 
 int main() {
     // static_assert(std::is_enum_v<unsigned int>);
@@ -1185,28 +1207,35 @@ int main() {
     );
 
     // [TODO]: Add register operations support
-    // write whole reg
-    // checks attempts to write RO fields
-    apply(r0.id([](auto old_r0) {
+    // simple op
+    apply(r0.self = 0xf00_r);
+    // multi-write
+    apply(r0.self = 0xf00_r,
+          r1.self = 0xf01_r);
+    // simple read
+    // auto [r0] = apply(r0.read());
+    // write and read
+    // auto [r1_val] = 
+    apply(r0.self = 0xf00_r,
+          r1.self.read());
+    // auto [r1_val] = // receives old value of r1 (before write)
+    apply(r0.self = 0xf00_r,
+          r1.self = 0xf01_r,
+          r1.self.read());
+    apply(r0.self = t,
+          r1.self = 0xbeef);
+    // rmw
+    apply(r0.self([](auto old_r0) {
         return old_r0 | 0x3;
     }));
-    apply(r0.id = 0xf0000000,
-          r0.id.read());
-    // read while reg
-    // uint32_t value;
-    // apply(r0.read(value));
-    // read-modify-write
-    // apply(r0([](auto v) {
-    //     return v*2;
-    // }));
 
-    // auto t = ros::reflect::to_tuple(r0);
-    // print_tuple(t);
+    apply(
+        r0.self([](auto old_r0, auto r1) {
+            return old_r0 & r1 & 0x3;
+        }, 
+        r0.self, r1.self)
+    );
 
-    // single-field read syntax
-    uint8_t v;
-    // v <= r0.field3;
-    
-    // return v;
-    return v;
+
+    return 0;
 }
