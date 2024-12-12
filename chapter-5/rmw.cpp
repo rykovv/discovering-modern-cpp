@@ -863,6 +863,31 @@ template <typename F, typename... Fields>
 struct is_field_assignment_invocable<ros::detail::field_assignment_invocable<F, Fields...>> : std::true_type {};
 
 
+template <typename...>
+struct is_register_assignment_safe : std::false_type {};
+
+template <typename Register, typename Register::value_type val>
+struct is_register_assignment_safe<ros::detail::register_assignment_safe<Register, val>> : std::true_type {};
+
+template <typename>
+struct is_register_assignment_safe_runtime : std::false_type {};
+
+template <typename Register>
+struct is_register_assignment_safe_runtime<ros::detail::register_assignment_safe_runtime<Register>> : std::true_type {};
+
+template <typename>
+struct is_register_assignment_unsafe : std::false_type {};
+
+template <typename Field>
+struct is_register_assignment_unsafe<ros::detail::register_assignment_unsafe<Field>> : std::true_type {};
+
+template <typename...>
+struct is_register_assignment_invocable : std::false_type {};
+
+template <typename F, typename... Registers>
+struct is_register_assignment_invocable<ros::detail::register_assignment_invocable<F, Registers...>> : std::true_type {};
+
+
 template <typename T>
 struct return_reads {
     using type = void;
@@ -1080,20 +1105,32 @@ requires detail::ApplicableRegisterOperations<Op, Ops...>
 auto apply(Op op, Ops ...ops) {// -> return_reads_t<decltype(filter::tuple_filter<is_register_read>(std::make_tuple(op, ops...)))> {
     std::cout << "reg apply" << std::endl;
 
+    // 1. evaluate invocable writes (doesn't make sense to sort. the point of sorting
+    //    is to potentially optimize bus utilization. read operations interleaved with
+    //    writes will not make it possible. on the other hand, there's not enough
+    //    weight on the side of keeping temporal values of the arguments until issuing
+    //    all of the writes at once. That also will make writes handling more complex.)
+    // 2. evaluate reads if any (may make sense to sort)
+    // 3. evaluate writes (may make sense to sort)
+
     // write whole reg
     // checks attempts to write RO fields
 
     auto operations = std::make_tuple(op, ops...);
 
+    auto invocable_writes = filter::tuple_filter<is_register_assignment_invocable>(operations);
+
     // compile-time writes
     auto safe_writes = filter::tuple_filter<is_register_assignment_safe>(operations);
     // runtime writes
-    auto safe_writes_runtime = filter::tuple_filter<is_field_assignment_safe_runtime>(operations);
-    auto unsafe_writes = filter::tuple_filter<is_field_assignment_unsafe>(operations);
+    auto safe_writes_runtime = filter::tuple_filter<is_register_assignment_safe_runtime>(operations);
+    auto unsafe_writes = filter::tuple_filter<is_register_assignment_unsafe>(operations);
 
     auto runtime_writes = std::tuple_cat(safe_writes_runtime, unsafe_writes);
 
-    auto invocable_writes = filter::tuple_filter<is_field_assignment_invocable>(operations);
+    if constexpr (std::tuple_size_v<decltype(invocable_writes)> > 0) {
+        
+    }
 
     // if there's a write and read for the same register old read
     //   value will be returned
