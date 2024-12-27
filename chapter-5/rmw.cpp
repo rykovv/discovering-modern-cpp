@@ -1138,12 +1138,12 @@ requires detail::ApplicableRegisterOperations<Op, Ops...>
 auto apply(Op op, Ops ...ops) {// -> return_reads_t<decltype(filter::tuple_filter<is_register_read>(std::make_tuple(op, ops...)))> {
     std::cout << "reg apply" << std::endl;
 
-    // 1. evaluate invocable writes (doesn't make sense to sort. the point of sorting
+    // 1. evaluate reads if any (may make sense to sort)
+    // 2. evaluate invocable writes (doesn't make sense to sort. the point of sorting
     //    is to potentially optimize bus utilization. read operations interleaved with
     //    writes will not make it possible. on the other hand, there's not enough
     //    weight on the side of keeping temporal values of the arguments until issuing
     //    all of the writes at once. That also will make writes handling more complex.)
-    // 2. evaluate reads if any (may make sense to sort)
     // 3. evaluate writes (may make sense to sort)
 
     // write whole reg
@@ -1161,10 +1161,9 @@ auto apply(Op op, Ops ...ops) {// -> return_reads_t<decltype(filter::tuple_filte
 
     auto runtime_writes = std::tuple_cat(safe_writes_runtime, unsafe_writes);
 
-    if constexpr (std::tuple_size_v<decltype(invocable_writes)> > 0) {
-        detail::perform_register_assignment_invocables(invocable_writes);
-    }
-
+    // first, make all reads for old values
+    //   cluster adjucent reads into separate tuples
+    //   call read_bundle to each tuple
     // if there's a write and read for the same register old read
     //   value will be returned
 
@@ -1175,12 +1174,14 @@ auto apply(Op op, Ops ...ops) {// -> return_reads_t<decltype(filter::tuple_filte
         ...);
     }(filter::tuple_filter<is_register_read>(operations));
 
-    // first, make all reads for old values
-    //   cluster adjucent reads into separate tuples
-    //   call read_bundle to each tuple
+    if constexpr (std::tuple_size_v<decltype(invocable_writes)> > 0) {
+        detail::perform_register_assignment_invocables(invocable_writes);
+    }
     
-    // second, cluster adjacent writes into separate tuples
+    // third, cluster adjacent writes into separate tuples
     //   call write bundled for each tuple
+
+    
 
     return reads;
 }
@@ -1300,7 +1301,7 @@ int main() {
     apply(r0.self = t,
           r1.self = 0xbeef);
 
-          
+
     // rmw
     apply(r0.self([](auto old_r0) {
         return old_r0 | 0x3;
