@@ -1093,7 +1093,6 @@ auto apply(Op op, Ops ...ops) -> return_reads_t<decltype(filter::tuple_filter<is
         constexpr bool has_invocable_writes = std::tuple_size_v<decltype(writes_inv)> > 0;
 
         if constexpr (is_partial_write || has_invocable_writes) {
-            // TODO: deal with WO fields
             static_assert(not reg::has_wo_field, "Attempt to read write-only register");
             value = bus::template read<value_type>(reg::address::value);
         }
@@ -1191,7 +1190,7 @@ auto apply(Op op, Ops ...ops) {// -> return_reads_t<decltype(filter::tuple_filte
         []<typename ...Ws>(std::tuple<Ws...> ws) -> void {
             constexpr bool ro_write_attempt = (Ws::type::has_ro_field or ...);
             static_assert(not ro_write_attempt, "Attemp to write read-only register");
-            
+
             (Ws::type::bus::write(std::get<Ws>(ws).value, Ws::type::address::value),...);
         }(writes_rt);
     }
