@@ -395,6 +395,32 @@ constexpr typename reg::value_type get_rmw_mask (reg const& r) {
     // return get_rwm_mask_helper(tup, std::make_index_sequence<reflect::get_struct_size<Reg>()>{});
 }
 
+template <typename Tup, std::size_t ...Idx>
+constexpr bool check_rw_fields_helper (access_type at, Tup const& t, std::index_sequence<Idx...>) {
+    return (
+        (
+            (
+                static_cast<uint8_t>(std::tuple_element_t<Idx, Tup>::access) & 
+                static_cast<uint8_t>(ros::access_type::RW)
+            ) == static_cast<uint8_t>(at)
+        ) | ...
+    );
+};
+
+template <typename reg>
+constexpr bool check_wo_fields (reg const& r) {
+    auto tup = reflect::to_tuple(r);
+    constexpr std::size_t tup_size = std::tuple_size_v<decltype(tup)>;
+    return check_rw_fields_helper(ros::access_type::WO, tup, std::make_index_sequence<tup_size>{});
+}
+
+template <typename reg>
+constexpr bool check_ro_fields (reg const& r) {
+    auto tup = reflect::to_tuple(r);
+    constexpr std::size_t tup_size = std::tuple_size_v<decltype(tup)>;
+    return check_rw_fields_helper(ros::access_type::RO, tup, std::make_index_sequence<tup_size>{});
+}
+
 template <typename Tuple, std::size_t ...Idx>
 constexpr auto get_write_mask_helper (Tuple const& tup, std::index_sequence<Idx...>) {
     return (std::tuple_element_t<Idx, Tuple>::type::mask | ...);
@@ -670,6 +696,8 @@ struct reg {
     using address = std::integral_constant<std::size_t, addr.value>;
 
     static constexpr value_type layout = detail::get_rmw_mask(reg_der{});
+    static constexpr bool has_wo_field = detail::check_wo_fields(reg_der{});
+    static constexpr bool has_ro_field = detail::check_ro_fields(reg_der{});
 
     static constexpr ros::detail::unsafe_register_operations_handler<reg> unsafe{};
     static constexpr ros::detail::safe_register_operations_handler<reg> self{};
@@ -957,6 +985,8 @@ constexpr void evaluate_invocable_assignments_helper(std::tuple<InvocableWrites.
 
 template<typename ...InvocableWrites>
 constexpr void evaluate_invocable_assignments(std::tuple<InvocableWrites...> writes) {
+    constexpr bool ro_write_attempt = (InvocableWrites::type::has_ro_field or ...);
+    static_assert(not ro_write_attempt, "Attemp to write read-only register");
     evaluate_invocable_assignments_helper(writes, std::make_index_sequence<sizeof...(InvocableWrites)>{});
 }
 }
@@ -1057,11 +1087,14 @@ auto apply(Op op, Ops ...ops) -> return_reads_t<decltype(filter::tuple_filter<is
     constexpr value_type write_mask = write_mask_ct | write_mask_rt | write_mask_inv;
 
     if constexpr (write_mask != 0) {
+        static_assert(not reg::has_ro_field, "Attempt to write read-only register");
+
         constexpr bool is_partial_write = ((rmw_mask & write_mask) != rmw_mask);
         constexpr bool has_invocable_writes = std::tuple_size_v<decltype(writes_inv)> > 0;
 
         if constexpr (is_partial_write || has_invocable_writes) {
             // TODO: deal with WO fields
+            static_assert(not reg::has_wo_field, "Attempt to read write-only register");
             value = bus::template read<value_type>(reg::address::value);
         }
 
@@ -1111,6 +1144,12 @@ auto apply(Op op, Ops ...ops) {// -> return_reads_t<decltype(filter::tuple_filte
     // runtime writes
     auto writes_rt = filter::tuple_filter<is_register_assignment_rt>(operations);
     auto writes_inv = filter::tuple_filter<is_register_assignment_invocable>(operations);
+    // reads
+    auto reads = filter::tuple_filter<is_register_read>(operations);
+
+    constexpr bool has_writes_ct = std::tuple_size_v<decltype(writes_ct)> > 0; 
+    constexpr bool has_writes_rt = std::tuple_size_v<decltype(writes_rt)> > 0; 
+    constexpr bool has_writes_inv = std::tuple_size_v<decltype(writes_inv)> > 0; 
 
     // first, make all reads for old values
     //   cluster adjucent reads into separate tuples
@@ -1118,14 +1157,17 @@ auto apply(Op op, Ops ...ops) {// -> return_reads_t<decltype(filter::tuple_filte
     // if there's a write and read for the same register old read
     //   value will be returned
 
-    auto reads = []<typename ...Rs>(std::tuple<Rs...>) /* -> ... */ {
+    auto evaluate_reads = []<typename ...Rs>(std::tuple<Rs...>) /* -> ... */ {
+        constexpr bool wo_read_attempt = (Rs::type::has_wo_field or ...);
+        static_assert(not wo_read_attempt, "Attemp to read write-only register");
+
         return std::make_tuple(
             Rs::type::bus::template read<typename Rs::type::value_type> (
                 Rs::type::address::value)
         ...);
-    }(filter::tuple_filter<is_register_read>(operations));
-
-    if constexpr (std::tuple_size_v<decltype(writes_inv)> > 0) {
+    };
+ 
+    if constexpr (has_writes_inv) {
         detail::evaluate_invocable_assignments(writes_inv);
     }
     
@@ -1136,15 +1178,25 @@ auto apply(Op op, Ops ...ops) {// -> return_reads_t<decltype(filter::tuple_filte
     //   out of compile-time accessible writes, and then let
     //   the compiler to optimize the runtime writes
 
-    []<typename ...Ws>(std::tuple<Ws...>) -> void {
-        (Ws::type::bus::write(Ws::value, Ws::type::address::value),...);
-    }(writes_ct);
+    if constexpr (has_writes_ct) {
+        []<typename ...Ws>(std::tuple<Ws...>) -> void {
+            constexpr bool ro_write_attempt = (Ws::type::has_ro_field or ...);
+            static_assert(not ro_write_attempt, "Attemp to write read-only register");
 
-    []<typename ...Ws>(std::tuple<Ws...> ws) -> void {
-        (Ws::type::bus::write(std::get<Ws>(ws).value, Ws::type::address::value),...);
-    }(writes_rt);
+            (Ws::type::bus::write(Ws::value, Ws::type::address::value),...);
+        }(writes_ct);
+    }
 
-    return reads;
+    if constexpr (has_writes_rt) {
+        []<typename ...Ws>(std::tuple<Ws...> ws) -> void {
+            constexpr bool ro_write_attempt = (Ws::type::has_ro_field or ...);
+            static_assert(not ro_write_attempt, "Attemp to write read-only register");
+            
+            (Ws::type::bus::write(std::get<Ws>(ws).value, Ws::type::address::value),...);
+        }(writes_rt);
+    }
+
+    return evaluate_reads(reads);
 }
 
 
