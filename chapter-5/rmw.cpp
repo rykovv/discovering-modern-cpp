@@ -628,6 +628,7 @@ struct register_assignment_unsafe : register_assignment<Register> {
 
 template <typename F, typename RegisterOp, typename Register0, typename... Registers>
 struct register_assignment_invocable<F, RegisterOp, Register0, Registers...> : register_assignment<RegisterOp> {
+    using registerOp = RegisterOp;
     using registers = std::tuple<Register0, Registers...>;
     
     register_assignment_invocable(F f)
@@ -964,6 +965,38 @@ template <typename T>
 constexpr T get_invocable_write_value(T value, T mask, std::tuple<> const& tup) {
     return value;
 }
+
+template<typename InvocableWrite, std::size_t ...Is>
+constexpr void perform_register_assignment_invocable_helper(InvocableWrite iw, std::index_sequence<Is...>) {
+    using registerOp = typename InvocableWrite::registerOp;
+    using busOp = registerOp::bus;
+    using registers = typename InvocableWrite::registers;
+
+    busOp::write(iw(
+        // call bus::read that corresponds to each register
+        std::tuple_element_t<Is, registers>::bus::template read<
+            typename std::tuple_element_t<Is, registers>::value_type
+        >(std::tuple_element_t<Is, registers>::address::value)
+        ...), 
+        registerOp::address::value
+    );
+}
+
+template<typename InvocableWrite>
+constexpr void perform_register_assignment_invocable(InvocableWrite iw) {
+    using registers = typename InvocableWrite::registers;
+    perform_register_assignment_invocable_helper(iw, std::make_index_sequence<std::tuple_size_v<registers>>{});
+}
+
+template<typename ...InvocableWrites, std::size_t ...Is>
+constexpr void perform_register_assignment_invocables_helper(std::tuple<InvocableWrites...> writes, std::index_sequence<Is...>) {
+    (perform_register_assignment_invocable(std::get<Is>(writes)), ...);
+}
+
+template<typename ...InvocableWrites>
+constexpr void perform_register_assignment_invocables(std::tuple<InvocableWrites...> writes) {
+    perform_register_assignment_invocables_helper(writes, std::make_index_sequence<sizeof...(InvocableWrites)>{});
+}
 }
 
 // namespace ros {
@@ -1129,7 +1162,7 @@ auto apply(Op op, Ops ...ops) {// -> return_reads_t<decltype(filter::tuple_filte
     auto runtime_writes = std::tuple_cat(safe_writes_runtime, unsafe_writes);
 
     if constexpr (std::tuple_size_v<decltype(invocable_writes)> > 0) {
-        
+        detail::perform_register_assignment_invocables(invocable_writes);
     }
 
     // if there's a write and read for the same register old read
