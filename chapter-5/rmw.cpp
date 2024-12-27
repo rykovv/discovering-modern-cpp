@@ -967,7 +967,7 @@ constexpr T get_invocable_write_value(T value, T mask, std::tuple<> const& tup) 
 }
 
 template<typename InvocableWrite, std::size_t ...Is>
-constexpr void perform_register_assignment_invocable_helper(InvocableWrite iw, std::index_sequence<Is...>) {
+constexpr void evaluate_invocable_assignment_helper(InvocableWrite iw, std::index_sequence<Is...>) {
     using registerOp = typename InvocableWrite::registerOp;
     using busOp = registerOp::bus;
     using registers = typename InvocableWrite::registers;
@@ -983,19 +983,19 @@ constexpr void perform_register_assignment_invocable_helper(InvocableWrite iw, s
 }
 
 template<typename InvocableWrite>
-constexpr void perform_register_assignment_invocable(InvocableWrite iw) {
+constexpr void evaluate_invocable_assignment(InvocableWrite iw) {
     using registers = typename InvocableWrite::registers;
-    perform_register_assignment_invocable_helper(iw, std::make_index_sequence<std::tuple_size_v<registers>>{});
+    evaluate_invocable_assignment_helper(iw, std::make_index_sequence<std::tuple_size_v<registers>>{});
 }
 
 template<typename ...InvocableWrites, std::size_t ...Is>
-constexpr void perform_register_assignment_invocables_helper(std::tuple<InvocableWrites...> writes, std::index_sequence<Is...>) {
-    (perform_register_assignment_invocable(std::get<Is>(writes)), ...);
+constexpr void evaluate_invocable_assignments_helper(std::tuple<InvocableWrites...> writes, std::index_sequence<Is...>) {
+    (evaluate_invocable_assignment(std::get<Is>(writes)), ...);
 }
 
 template<typename ...InvocableWrites>
-constexpr void perform_register_assignment_invocables(std::tuple<InvocableWrites...> writes) {
-    perform_register_assignment_invocables_helper(writes, std::make_index_sequence<sizeof...(InvocableWrites)>{});
+constexpr void evaluate_invocable_assignments(std::tuple<InvocableWrites...> writes) {
+    evaluate_invocable_assignments_helper(writes, std::make_index_sequence<sizeof...(InvocableWrites)>{});
 }
 }
 
@@ -1175,7 +1175,7 @@ auto apply(Op op, Ops ...ops) {// -> return_reads_t<decltype(filter::tuple_filte
     }(filter::tuple_filter<is_register_read>(operations));
 
     if constexpr (std::tuple_size_v<decltype(invocable_writes)> > 0) {
-        detail::perform_register_assignment_invocables(invocable_writes);
+        detail::evaluate_invocable_assignments(invocable_writes);
     }
     
     // third, cluster adjacent writes into separate tuples
