@@ -1167,10 +1167,10 @@ auto apply(Op op, Ops ...ops) {// -> return_reads_t<decltype(filter::tuple_filte
     // if there's a write and read for the same register old read
     //   value will be returned
 
-    auto reads = []<typename ...Ts>(std::tuple<Ts...>) /* -> ... */ {
+    auto reads = []<typename ...Rs>(std::tuple<Rs...>) /* -> ... */ {
         return std::make_tuple(
-            Ts::type::bus::template read<typename Ts::type::value_type> (
-                Ts::type::address::value)
+            Rs::type::bus::template read<typename Rs::type::value_type> (
+                Rs::type::address::value)
         ...);
     }(filter::tuple_filter<is_register_read>(operations));
 
@@ -1181,7 +1181,17 @@ auto apply(Op op, Ops ...ops) {// -> return_reads_t<decltype(filter::tuple_filte
     // third, cluster adjacent writes into separate tuples
     //   call write bundled for each tuple
 
-    
+    // writes are peformed separately. the intent is to get jem
+    //   out of compile-time accessible writes, and then let
+    //   the compiler to optimize the runtime writes
+
+    []<typename ...Ws>(std::tuple<Ws...>) -> void {
+        (Ws::type::bus::write(Ws::value, Ws::type::address::value),...);
+    }(safe_writes);
+
+    []<typename ...Ws>(std::tuple<Ws...> ws) -> void {
+        (Ws::type::bus::write(std::get<Ws>(ws).value, Ws::type::address::value),...);
+    }(runtime_writes);
 
     return reads;
 }
@@ -1284,7 +1294,6 @@ int main() {
         r0.field0, r0.field1, r0.field2)
     );
 
-    // [TODO]: Add register operations support
     // simple op
     apply(r0.self = 0xf00_r);
     // multi-write
