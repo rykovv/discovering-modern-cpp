@@ -1168,6 +1168,13 @@ auto apply(Op op, Ops ...ops) {// -> return_reads_t<decltype(filter::tuple_filte
     // if there's a write and read for the same register old read
     //   value will be returned
 
+    auto reads = []<typename ...Ts>(std::tuple<Ts...>) /* -> ... */ {
+        return std::make_tuple(
+            Ts::type::bus::template read<typename Ts::type::value_type> (
+                Ts::type::address::value)
+        ...);
+    }(filter::tuple_filter<is_register_read>(operations));
+
     // first, make all reads for old values
     //   cluster adjucent reads into separate tuples
     //   call read_bundle to each tuple
@@ -1175,7 +1182,7 @@ auto apply(Op op, Ops ...ops) {// -> return_reads_t<decltype(filter::tuple_filte
     // second, cluster adjacent writes into separate tuples
     //   call write bundled for each tuple
 
-    // return reads if requiested
+    return reads;
 }
 
 
@@ -1240,7 +1247,7 @@ struct my_reg : ros::reg<my_reg, uint32_t, 0x2000_addr, mmio_bus> {
     //     > dj_field;
 } r0;
 
-struct my_reg1 : ros::reg<my_reg, uint32_t, 0x2000_addr, mmio_bus> {
+struct my_reg1 : ros::reg<my_reg, uint32_t, 0x3000_addr, mmio_bus> {
     ros::field<my_reg, 31_msb, 0_lsb, ros::access_type::RW> field0;
 } r1;
 
@@ -1283,17 +1290,17 @@ int main() {
     apply(r0.self = 0xf00_r,
           r1.self = 0xf01_r);
     // simple read
-    // auto [r0] = apply(r0.read());
+    auto [r0_val] = apply(r0.self.read());
     // write and read
-    // auto [r1_val] = 
-    apply(r0.self = 0xf00_r,
+    auto [r1_val0] = apply(r0.self = 0xf00_r,
           r1.self.read());
-    // auto [r1_val] = // receives old value of r1 (before write)
-    apply(r0.self = 0xf00_r,
+    auto [r1_val1] = apply(r0.self = 0xf00_r,
           r1.self = 0xf01_r,
-          r1.self.read());
+          r1.self.read()); // receives old value of r1 (before write)
     apply(r0.self = t,
           r1.self = 0xbeef);
+
+          
     // rmw
     apply(r0.self([](auto old_r0) {
         return old_r0 | 0x3;
@@ -1301,7 +1308,7 @@ int main() {
 
     apply(
         r0.self([](auto old_r0, auto r1) {
-            return old_r0 & r1 & 0x3;
+            return old_r0 & r1 & 0xf00000;
         }, 
         r0.self, r1.self)
     );
