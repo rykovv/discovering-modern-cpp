@@ -221,13 +221,13 @@ struct unsafe_field_operations_handler {
     using value_type = typename Field::value_type;
 
     constexpr auto operator= (auto const& rhs) const -> field_assignment_unsafe<Field> {
-        static_assert(Field::access_type != access_type::RO, "cannot write read-only field");
+        static_assert(Field::access != access_type::RO, "cannot write read-only field");
         // safe static_case because assignment overload checked type and width validity
         return ros::detail::field_assignment_unsafe<Field>{static_cast<value_type>(rhs)};
     }
 
     constexpr auto operator= (auto && rhs) const -> field_assignment_unsafe<Field> {
-        static_assert(Field::access_type != access_type::RO, "cannot write read-only field");
+        static_assert(Field::access != access_type::RO, "cannot write read-only field");
         // safe static_case because assignment overload checked type and width validity
         return field_assignment_unsafe<Field>{static_cast<value_type>(rhs)};
     }
@@ -381,7 +381,7 @@ constexpr auto get_rwm_mask_helper (std::tuple<T, Ts...> const& t, std::index_se
     return (
         (
             (
-                static_cast<std::remove_cvref_t<decltype(std::get<Idx>(t))>::value_type_r>(std::get<Idx>(t).access_type) & 
+                static_cast<std::remove_cvref_t<decltype(std::get<Idx>(t))>::value_type_r>(std::get<Idx>(t).access) & 
                 static_cast<std::remove_cvref_t<decltype(std::get<Idx>(t))>::value_type_r>(ros::access_type::R)
             ) ? 
             std::get<Idx>(t).mask : 0
@@ -423,7 +423,7 @@ struct field {
     using value_type = value_type_f;
     using reg = reg_derived;
 
-    static constexpr access_type access_type = at;
+    static constexpr access_type access = at;
 
     static constexpr uint8_t length = []() {
         return msb.value == lsb.value ? 1 : msb.value - lsb.value;
@@ -447,7 +447,7 @@ struct field {
     requires (std::is_convertible_v<U, value_type>)
     constexpr auto operator= (detail::field_value<U, val>) const -> ros::detail::field_assignment_safe<field, val> {
         static_assert((
-            static_cast<value_type_r>(access_type) & 
+            static_cast<value_type_r>(access) & 
             static_cast<value_type_r>(access_type::W)) != 0, 
             "cannot write read-only or NA field");
         static_assert(val <= (mask >> lsb.value), "assigned value greater than allowed");
@@ -481,7 +481,7 @@ struct field {
               std::is_convertible_v<T, value_type> &&
               std::numeric_limits<T>::digits >= msb.value - lsb.value)
     constexpr auto operator= (T const& rhs) const -> ros::detail::field_assignment_safe_runtime<field> {
-        static_assert((static_cast<value_type_r>(access_type) & static_cast<value_type_r>(access_type::W)) != 0, "cannot write read-only field");
+        static_assert((static_cast<value_type_r>(access) & static_cast<value_type_r>(access_type::W)) != 0, "cannot write read-only field");
         static_assert(std::numeric_limits<value_type>::digits >= std::numeric_limits<T>::digits, "Unsafe assignment. Assigned value type is too wide.");
 
         return ros::detail::field_assignment_safe_runtime<field>{runtime_check(rhs)};
@@ -492,7 +492,7 @@ struct field {
               std::is_convertible_v<T, value_type> &&
               std::numeric_limits<T>::digits >= msb.value - lsb.value)
     constexpr auto operator= (T && rhs) const -> ros::detail::field_assignment_safe_runtime<field> {
-        static_assert((static_cast<value_type_r>(access_type) & static_cast<value_type_r>(access_type::W)) != 0, "cannot write read-only field");
+        static_assert((static_cast<value_type_r>(access) & static_cast<value_type_r>(access_type::W)) != 0, "cannot write read-only field");
         static_assert(std::numeric_limits<value_type>::digits >= std::numeric_limits<T>::digits, "Unsafe assignment. Assigned value type is too wide.");
         
         return ros::detail::field_assignment_safe_runtime<field>{runtime_check(rhs)};
@@ -501,25 +501,25 @@ struct field {
     template <typename EnumT>
     requires (std::is_enum_v<EnumT>)
     constexpr auto operator= (EnumT val) const -> ros::detail::field_assignment_safe_runtime<field> {
-        static_assert((static_cast<value_type_r>(access_type) & static_cast<value_type_r>(access_type::W)) != 0, "cannot write read-only field");
+        static_assert((static_cast<value_type_r>(access) & static_cast<value_type_r>(access_type::W)) != 0, "cannot write read-only field");
         // static_assert(static_cast<value_type_r>(val) <= (mask >> lsb.value), "assigned value greater than allowed");
         return ros::detail::field_assignment_safe_runtime<field>{runtime_check(val)};
     }
 
     constexpr auto read() const -> ros::detail::field_read<field> {
-        static_assert((static_cast<value_type_r>(access_type) & static_cast<value_type_r>(access_type::R)) != 0, "cannot read write-only or NA field");
+        static_assert((static_cast<value_type_r>(access) & static_cast<value_type_r>(access_type::R)) != 0, "cannot read write-only or NA field");
         return ros::detail::field_read<field>{};
     }
 
     constexpr auto operator() (std::invocable<value_type> auto f) const -> ros::detail::field_assignment_invocable<decltype(f), field, field> {
-        static_assert((static_cast<value_type_r>(access_type) & static_cast<value_type_r>(access_type::RW)) != 0, "cannot read and write read/write-only or NA field");
+        static_assert((static_cast<value_type_r>(access) & static_cast<value_type_r>(access_type::RW)) != 0, "cannot read and write read/write-only or NA field");
         return ros::detail::field_assignment_invocable<decltype(f), field, field>{f};
     }
 
     template <typename F, typename Field0, typename... Fields>
     requires std::invocable<F, typename Field0::value_type, typename Fields::value_type...>
     constexpr auto operator() (F f, Field0 f0, Fields... fs) const -> ros::detail::field_assignment_invocable<F, field, Field0, Fields...> {
-        static_assert((static_cast<value_type_r>(access_type) & static_cast<value_type_r>(access_type::RW)) != 0, "cannot read and write read/write-only or NA field");
+        static_assert((static_cast<value_type_r>(access) & static_cast<value_type_r>(access_type::RW)) != 0, "cannot read and write read/write-only or NA field");
         return ros::detail::field_assignment_invocable<F, field, Field0, Fields...>{f};
     }
 
