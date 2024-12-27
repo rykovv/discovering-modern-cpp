@@ -204,9 +204,9 @@ struct field_read;
 template <typename Register>
 struct register_assignment;
 template <typename Register, typename Register::value_type val>
-struct register_assignment_safe;
+struct register_assignment_ct;
 template <typename Register>
-struct register_assignment_safe_runtime;
+struct register_assignment_rt;
 template <typename Register>
 struct register_assignment_unsafe;
 template <typename F, typename Register, typename... Registers>
@@ -242,14 +242,14 @@ struct safe_register_operations_handler {
 
     template <typename U, U val>
     requires (std::is_convertible_v<U, value_type>)
-    constexpr auto operator= (register_value<U, val>) const -> register_assignment_safe<Register, val> const {
+    constexpr auto operator= (register_value<U, val>) const -> register_assignment_ct<Register, val> const {
         static_assert(static_cast<value_type>(val & ~Register::layout) == 0, "Attempt to assign read-only bits");
-        return ros::detail::register_assignment_safe<Register, val>{};
+        return ros::detail::register_assignment_ct<Register, val>{};
     }
 
     template <typename U>
     requires std::integral<U> && std::is_convertible_v<U, value_type>
-    constexpr auto operator= (U const& rhs) const -> ros::detail::register_assignment_safe_runtime<Register> {
+    constexpr auto operator= (U const& rhs) const -> ros::detail::register_assignment_rt<Register> {
         static_assert(std::numeric_limits<value_type>::digits >= std::numeric_limits<U>::digits, "Unsafe assignment. Assigned value type is too wide.");
 
         value_type value;
@@ -259,12 +259,12 @@ struct safe_register_operations_handler {
             value = rhs;
         }
 
-        return ros::detail::register_assignment_safe_runtime<Register>{value};
+        return ros::detail::register_assignment_rt<Register>{value};
     }
 
     template <typename U>
     requires std::integral<U> && std::is_convertible_v<U, value_type>
-    constexpr auto operator= (U && rhs) const -> ros::detail::register_assignment_safe_runtime<Register> {
+    constexpr auto operator= (U && rhs) const -> ros::detail::register_assignment_rt<Register> {
         static_assert(std::numeric_limits<value_type>::digits >= std::numeric_limits<U>::digits, "Unsafe assignment. Assigned value type is too wide.");
 
         value_type value;
@@ -274,7 +274,7 @@ struct safe_register_operations_handler {
             value = rhs;
         }
         
-        return ros::detail::register_assignment_safe_runtime<Register>{value};
+        return ros::detail::register_assignment_rt<Register>{value};
     }
 
     constexpr auto operator() (std::invocable<value_type> auto f) const -> ros::detail::register_assignment_invocable<decltype(f), Register, Register> {
@@ -590,25 +590,15 @@ struct register_assignment {
 };
 
 template <typename Register, typename Register::value_type val>
-struct register_assignment_safe : register_assignment<Register> {
+struct register_assignment_ct : register_assignment<Register> {
     static constexpr typename Register::value_type value = val;
 };
 
 template <typename Register>
-struct register_assignment_safe_runtime : register_assignment<Register> {
+struct register_assignment_rt : register_assignment<Register> {
     using value_type = typename Register::value_type;
 
-    constexpr register_assignment_safe_runtime(value_type v)
-      : value{v} {}
-
-    value_type value;
-};
-
-template <typename Register>
-struct register_assignment_unsafe : register_assignment<Register> {
-    using value_type = typename Register::value_type;
-
-    constexpr register_assignment_unsafe(value_type v)
+    constexpr register_assignment_rt(value_type v)
       : value{v} {}
 
     value_type value;
@@ -843,22 +833,16 @@ struct is_field_assignment_invocable<ros::detail::field_assignment_invocable<F, 
 
 
 template <typename...>
-struct is_register_assignment_safe : std::false_type {};
+struct is_register_assignment_ct : std::false_type {};
 
 template <typename Register, typename Register::value_type val>
-struct is_register_assignment_safe<ros::detail::register_assignment_safe<Register, val>> : std::true_type {};
+struct is_register_assignment_ct<ros::detail::register_assignment_ct<Register, val>> : std::true_type {};
 
 template <typename>
-struct is_register_assignment_safe_runtime : std::false_type {};
+struct is_register_assignment_rt : std::false_type {};
 
 template <typename Register>
-struct is_register_assignment_safe_runtime<ros::detail::register_assignment_safe_runtime<Register>> : std::true_type {};
-
-template <typename>
-struct is_register_assignment_unsafe : std::false_type {};
-
-template <typename Field>
-struct is_register_assignment_unsafe<ros::detail::register_assignment_unsafe<Field>> : std::true_type {};
+struct is_register_assignment_rt<ros::detail::register_assignment_rt<Register>> : std::true_type {};
 
 template <typename...>
 struct is_register_assignment_invocable : std::false_type {};
@@ -1109,8 +1093,6 @@ auto apply(Op op, Ops ...ops) -> return_reads_t<decltype(filter::tuple_filter<is
 template<typename Op, typename ...Ops>
 requires detail::ApplicableRegisterOperations<Op, Ops...>
 auto apply(Op op, Ops ...ops) {// -> return_reads_t<decltype(filter::tuple_filter<is_register_read>(std::make_tuple(op, ops...)))> {
-    std::cout << "reg apply" << std::endl;
-
     // 1. evaluate reads if any (may make sense to sort)
     // 2. evaluate invocable writes (doesn't make sense to sort. the point of sorting
     //    is to potentially optimize bus utilization. read operations interleaved with
@@ -1124,15 +1106,11 @@ auto apply(Op op, Ops ...ops) {// -> return_reads_t<decltype(filter::tuple_filte
 
     auto operations = std::make_tuple(op, ops...);
 
-    auto invocable_writes = filter::tuple_filter<is_register_assignment_invocable>(operations);
-
     // compile-time writes
-    auto safe_writes = filter::tuple_filter<is_register_assignment_safe>(operations);
+    auto writes_ct = filter::tuple_filter<is_register_assignment_ct>(operations);
     // runtime writes
-    auto safe_writes_runtime = filter::tuple_filter<is_register_assignment_safe_runtime>(operations);
-    auto unsafe_writes = filter::tuple_filter<is_register_assignment_unsafe>(operations);
-
-    auto runtime_writes = std::tuple_cat(safe_writes_runtime, unsafe_writes);
+    auto writes_rt = filter::tuple_filter<is_register_assignment_rt>(operations);
+    auto writes_inv = filter::tuple_filter<is_register_assignment_invocable>(operations);
 
     // first, make all reads for old values
     //   cluster adjucent reads into separate tuples
@@ -1147,8 +1125,8 @@ auto apply(Op op, Ops ...ops) {// -> return_reads_t<decltype(filter::tuple_filte
         ...);
     }(filter::tuple_filter<is_register_read>(operations));
 
-    if constexpr (std::tuple_size_v<decltype(invocable_writes)> > 0) {
-        detail::evaluate_invocable_assignments(invocable_writes);
+    if constexpr (std::tuple_size_v<decltype(writes_inv)> > 0) {
+        detail::evaluate_invocable_assignments(writes_inv);
     }
     
     // third, cluster adjacent writes into separate tuples
@@ -1160,11 +1138,11 @@ auto apply(Op op, Ops ...ops) {// -> return_reads_t<decltype(filter::tuple_filte
 
     []<typename ...Ws>(std::tuple<Ws...>) -> void {
         (Ws::type::bus::write(Ws::value, Ws::type::address::value),...);
-    }(safe_writes);
+    }(writes_ct);
 
     []<typename ...Ws>(std::tuple<Ws...> ws) -> void {
         (Ws::type::bus::write(std::get<Ws>(ws).value, Ws::type::address::value),...);
-    }(runtime_writes);
+    }(writes_rt);
 
     return reads;
 }
