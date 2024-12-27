@@ -193,11 +193,9 @@ namespace detail {
 template <typename Field>
 struct field_assignment;
 template <typename Field, typename Field::value_type val>
-struct field_assignment_safe;
+struct field_assignment_ct;
 template <typename Field>
-struct field_assignment_safe_runtime;
-template <typename Field>
-struct field_assignment_unsafe;
+struct field_assignment_rt;
 template <typename F, typename Field, typename... Fields>
 struct field_assignment_invocable;
 template <typename Field>
@@ -220,16 +218,16 @@ template <typename Field>
 struct unsafe_field_operations_handler {
     using value_type = typename Field::value_type;
 
-    constexpr auto operator= (auto const& rhs) const -> field_assignment_unsafe<Field> {
+    constexpr auto operator= (auto const& rhs) const -> field_assignment_rt<Field> {
         static_assert(Field::access != access_type::RO, "cannot write read-only field");
         // safe static_case because assignment overload checked type and width validity
-        return ros::detail::field_assignment_unsafe<Field>{static_cast<value_type>(rhs)};
+        return ros::detail::field_assignment_rt<Field>{static_cast<value_type>(rhs)};
     }
 
-    constexpr auto operator= (auto && rhs) const -> field_assignment_unsafe<Field> {
+    constexpr auto operator= (auto && rhs) const -> field_assignment_rt<Field> {
         static_assert(Field::access != access_type::RO, "cannot write read-only field");
         // safe static_case because assignment overload checked type and width validity
-        return field_assignment_unsafe<Field>{static_cast<value_type>(rhs)};
+        return field_assignment_rt<Field>{static_cast<value_type>(rhs)};
     }
 };
 
@@ -445,34 +443,34 @@ struct field {
 
     template <typename U, U val>
     requires (std::is_convertible_v<U, value_type>)
-    constexpr auto operator= (detail::field_value<U, val>) const -> ros::detail::field_assignment_safe<field, val> {
+    constexpr auto operator= (detail::field_value<U, val>) const -> ros::detail::field_assignment_ct<field, val> {
         static_assert((
             static_cast<value_type_r>(access) & 
             static_cast<value_type_r>(access_type::W)) != 0, 
             "cannot write read-only or NA field");
         static_assert(val <= (mask >> lsb.value), "assigned value greater than allowed");
-        return ros::detail::field_assignment_safe<field, val>{};
+        return ros::detail::field_assignment_ct<field, val>{};
     }
 
-    // constexpr auto operator= (FieldType auto val) const -> ros::detail::field_assignment_safe_runtime<field> {
+    // constexpr auto operator= (FieldType auto val) const -> ros::detail::field_assignment_rt<field> {
     //     static_assert(access_type != access_type::RO, "cannot write read-only field");
     //     static_assert(val <= (mask >> lsb.value), "assigned value greater than allowed");
-    //     return ros::detail::field_assignment_safe_runtime<field>{val};
+    //     return ros::detail::field_assignment_rt<field>{val};
     // }
 
     // field-to-field assignment needs elaboration
-    // constexpr auto operator= (auto const& rhs) -> ros::detail::field_assignment_safe<field, decltype(rhs)::value> {
+    // constexpr auto operator= (auto const& rhs) -> ros::detail::field_assignment_ct<field, decltype(rhs)::value> {
     //     static_assert(access_type != access_type::RO, "cannot write read-only field");
     //     using rhs_type = std::remove_reference_t<decltype(rhs)>;
     //     static_assert(rhs_type::length <= msb - lsb, "larger field cannot be safely assigned to a narrower one");
-    //     return ros::detail::field_assignment_safe<field, rhs.value>{};
+    //     return ros::detail::field_assignment_ct<field, rhs.value>{};
     // }
 
-    // constexpr auto operator= (auto && rhs) -> ros::detail::field_assignment_safe<field, decltype(rhs)::value> {
+    // constexpr auto operator= (auto && rhs) -> ros::detail::field_assignment_ct<field, decltype(rhs)::value> {
     //     static_assert(access_type != access_type::RO, "cannot write read-only field");
     //     using rhs_type = std::remove_reference_t<decltype(rhs)>;
     //     static_assert(rhs_type::length <= msb - lsb, "larger field cannot be safely assigned to a narrower one");
-    //     return ros::detail::field_assignment_safe<field, rhs.value>{};
+    //     return ros::detail::field_assignment_ct<field, rhs.value>{};
     // }
 
     // [TODO] create concept
@@ -480,30 +478,30 @@ struct field {
     requires (std::unsigned_integral<T> &&
               std::is_convertible_v<T, value_type> &&
               std::numeric_limits<T>::digits >= msb.value - lsb.value)
-    constexpr auto operator= (T const& rhs) const -> ros::detail::field_assignment_safe_runtime<field> {
+    constexpr auto operator= (T const& rhs) const -> ros::detail::field_assignment_rt<field> {
         static_assert((static_cast<value_type_r>(access) & static_cast<value_type_r>(access_type::W)) != 0, "cannot write read-only field");
         static_assert(std::numeric_limits<value_type>::digits >= std::numeric_limits<T>::digits, "Unsafe assignment. Assigned value type is too wide.");
 
-        return ros::detail::field_assignment_safe_runtime<field>{runtime_check(rhs)};
+        return ros::detail::field_assignment_rt<field>{runtime_check(rhs)};
     }
 
     template <typename T>
     requires (std::unsigned_integral<T> &&
               std::is_convertible_v<T, value_type> &&
               std::numeric_limits<T>::digits >= msb.value - lsb.value)
-    constexpr auto operator= (T && rhs) const -> ros::detail::field_assignment_safe_runtime<field> {
+    constexpr auto operator= (T && rhs) const -> ros::detail::field_assignment_rt<field> {
         static_assert((static_cast<value_type_r>(access) & static_cast<value_type_r>(access_type::W)) != 0, "cannot write read-only field");
         static_assert(std::numeric_limits<value_type>::digits >= std::numeric_limits<T>::digits, "Unsafe assignment. Assigned value type is too wide.");
         
-        return ros::detail::field_assignment_safe_runtime<field>{runtime_check(rhs)};
+        return ros::detail::field_assignment_rt<field>{runtime_check(rhs)};
     }
 
     template <typename EnumT>
     requires (std::is_enum_v<EnumT>)
-    constexpr auto operator= (EnumT val) const -> ros::detail::field_assignment_safe_runtime<field> {
+    constexpr auto operator= (EnumT val) const -> ros::detail::field_assignment_rt<field> {
         static_assert((static_cast<value_type_r>(access) & static_cast<value_type_r>(access_type::W)) != 0, "cannot write read-only field");
         // static_assert(static_cast<value_type_r>(val) <= (mask >> lsb.value), "assigned value greater than allowed");
-        return ros::detail::field_assignment_safe_runtime<field>{runtime_check(val)};
+        return ros::detail::field_assignment_rt<field>{runtime_check(val)};
     }
 
     constexpr auto read() const -> ros::detail::field_read<field> {
@@ -552,25 +550,15 @@ struct field_assignment {
     using type = Field;
 };
 template <typename Field, typename Field::value_type val>
-struct field_assignment_safe : field_assignment<Field> {
+struct field_assignment_ct : field_assignment<Field> {
     static constexpr typename Field::value_type value = val;
 };
 
 template <typename Field>
-struct field_assignment_safe_runtime : field_assignment<Field> {
+struct field_assignment_rt : field_assignment<Field> {
     using value_type = typename Field::value_type;
 
-    constexpr field_assignment_safe_runtime(value_type v)
-      : value{v} {}
-
-    value_type value;
-};
-
-template <typename Field>
-struct field_assignment_unsafe : field_assignment<Field> {
-    using value_type = typename Field::value_type;
-
-    constexpr field_assignment_unsafe(value_type v)
+    constexpr field_assignment_rt(value_type v)
       : value{v} {}
 
     value_type value;
@@ -828,32 +816,22 @@ template <typename Field>
 constexpr bool is_field_read_v = is_field_read<Field>::value;
 
 template <typename>
-struct is_field_assignment_safe {
+struct is_field_assignment_ct {
     static constexpr bool value = false;
 };
 
 template <typename Field, typename Field::value_type val>
-struct is_field_assignment_safe<ros::detail::field_assignment_safe<Field, val>> {
+struct is_field_assignment_ct<ros::detail::field_assignment_ct<Field, val>> {
     static constexpr bool value = true;
 };
 
 template <typename>
-struct is_field_assignment_safe_runtime {
+struct is_field_assignment_rt {
     static constexpr bool value = false;
 };
 
 template <typename Field>
-struct is_field_assignment_safe_runtime<ros::detail::field_assignment_safe_runtime<Field>> {
-    static constexpr bool value = true;
-};
-
-template <typename>
-struct is_field_assignment_unsafe {
-    static constexpr bool value = false;
-};
-
-template <typename Field>
-struct is_field_assignment_unsafe<ros::detail::field_assignment_unsafe<Field>> {
+struct is_field_assignment_rt<ros::detail::field_assignment_rt<Field>> {
     static constexpr bool value = true;
 };
 
@@ -1083,41 +1061,36 @@ auto apply(Op op, Ops ...ops) -> return_reads_t<decltype(filter::tuple_filter<is
 
     value_type value{};
 
-    // constexpr bool return_reads = std::disjunction_v<std::is_same<Op, ros::detail::field_read<typename Op::type>>, std::is_same<Ops, ros::detail::field_read<typename Ops::type>>...>;
-
     // compile-time writes
-    auto safe_writes = filter::tuple_filter<is_field_assignment_safe>(operations);
+    auto writes_ct = filter::tuple_filter<is_field_assignment_ct>(operations);
     // runtime writes
-    auto safe_writes_runtime = filter::tuple_filter<is_field_assignment_safe_runtime>(operations);
-    auto unsafe_writes = filter::tuple_filter<is_field_assignment_unsafe>(operations);
+    auto writes_rt = filter::tuple_filter<is_field_assignment_rt>(operations);
+    auto writes_inv = filter::tuple_filter<is_field_assignment_invocable>(operations);
 
-    auto runtime_writes = std::tuple_cat(safe_writes_runtime, unsafe_writes);
-
-    auto invocable_writes = filter::tuple_filter<is_field_assignment_invocable>(operations);
-
-    constexpr value_type comptime_write_mask = detail::get_write_mask<value_type>(safe_writes);
-    constexpr value_type runtime_write_mask = detail::get_write_mask<value_type>(runtime_writes);
-    constexpr value_type invocable_write_mask = detail::get_write_mask<value_type>(invocable_writes);
-    constexpr value_type write_mask = comptime_write_mask | runtime_write_mask | invocable_write_mask;
+    constexpr value_type write_mask_ct = detail::get_write_mask<value_type>(writes_ct);
+    constexpr value_type write_mask_rt = detail::get_write_mask<value_type>(writes_rt);
+    constexpr value_type write_mask_inv = detail::get_write_mask<value_type>(writes_inv);
+    constexpr value_type write_mask = write_mask_ct | write_mask_rt | write_mask_inv;
 
     if constexpr (write_mask != 0) {
         constexpr bool is_partial_write = ((rmw_mask & write_mask) != rmw_mask);
-        constexpr bool has_invocable_writes = std::tuple_size_v<decltype(invocable_writes)> > 0;
+        constexpr bool has_invocable_writes = std::tuple_size_v<decltype(writes_inv)> > 0;
 
         if constexpr (is_partial_write || has_invocable_writes) {
+            // TODO: deal with WO fields
             value = bus::template read<value_type>(reg::address::value);
         }
 
         // evaluate invocables at the beginning
         // it doesn't make much sense to evaluate it at the end because it will have 
         // newly assigned values. this way just literals could be provided in the lambda
-        value = detail::get_invocable_write_value(value, invocable_write_mask, invocable_writes);
+        value = detail::get_invocable_write_value(value, write_mask_inv, writes_inv);
 
         // [TODO] study efficiency of bundling together all writes
         // compile time
-        value = detail::get_write_value(value, comptime_write_mask, safe_writes);
+        value = detail::get_write_value(value, write_mask_ct, writes_ct);
         // runtime
-        value = detail::get_write_value(value, runtime_write_mask, runtime_writes);
+        value = detail::get_write_value(value, write_mask_rt, writes_rt);
 
         bus::write(value, reg::address::value);
     } else /* if (return_reads) */ {
