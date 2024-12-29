@@ -10,31 +10,24 @@
 
 namespace ros {
 namespace detail {
-template <typename T>
-concept Msb = std::unsigned_integral<T>;
 
-template <Msb MsbT, MsbT val>
+template <std::unsigned_integral MsbT, MsbT val>
 struct msb {
     static constexpr MsbT value = val;
 };
 
-template <typename T>
-concept Lsb = std::unsigned_integral<T>;
-
-template <Lsb LsbT, LsbT val>
+template <std::unsigned_integral LsbT, LsbT val>
 struct lsb {
     static constexpr LsbT value = val;
 };
 
-template <typename T>
-concept Addr = std::unsigned_integral<T>;
-
-template <Addr AddrT, AddrT val>
+template <std::unsigned_integral AddrT, AddrT val>
 struct addr {
     static constexpr AddrT value = val;
 };
-}
+} // namespace ros::detail
 
+namespace detail {
 template <typename T, typename enable = void>
 struct unwrap_enum {
     using type = T;
@@ -63,6 +56,7 @@ concept FieldSelectable =
 
 template <typename T>
 concept FieldType = std::integral<T> || std::is_enum_v<T>;
+} // namespace ros::detail
 
 namespace detail {
 
@@ -70,11 +64,11 @@ template <char Char>
 constexpr bool is_decimal_digit_v = Char >= '0' && Char <= '9';
 
 template <char ...Chars>
-concept DecimalNumber = (is_decimal_digit_v<Chars> && ...);
+concept decimal_number  = (is_decimal_digit_v<Chars> && ...);
 
 template <typename T, char... Chars>
-requires DecimalNumber<Chars...>
-[[nodiscard]] static constexpr auto to_unsigned_const() -> T {
+requires decimal_number <Chars...>
+[[nodiscard]] static constexpr auto to_constant() -> T {
     constexpr T value = []() {
         constexpr std::array<char, sizeof...(Chars)> chars{Chars...};
         T sum = 0;
@@ -97,23 +91,20 @@ template <char Char>
 constexpr bool is_0_v = Char == '0';
 
 template <char Char>
-struct is_hex_char {
-    static constexpr bool value = ros::detail::is_decimal_digit_v<Char> || 
+constexpr bool is_hex_char_v =
     (Char >= 'A' && Char <= 'F' || Char >= 'a' && Char <= 'f');
-};
-template <char Char>
-constexpr bool is_hex_char_v = ros::detail::is_hex_char<Char>::value;
 
-template <char Char0, char Char1, char ...Chars>
-concept HexadecimalNumber = (
-    ros::detail::is_0_v<Char0> &&
-    ros::detail::is_x_v<Char1> &&
-    (ros::detail::is_hex_char_v<Chars> && ...)
-);
+template <char Char>
+constexpr bool is_hex_digit_v =
+    is_decimal_digit_v<Char> || is_hex_char_v<Char>;
+
+template <char Char0, char Char1, char... Chars>
+concept hex_number =
+    is_0_v<Char0> && is_x_v<Char1> && (is_hex_digit_v<Chars> && ...);
 
 template <typename T, char Char0, char Char1, char... Chars>
-requires HexadecimalNumber<Char0, Char1, Chars...>
-[[nodiscard]] static constexpr auto to_unsigned_const() -> T {
+requires hex_number<Char0, Char1, Chars...>
+[[nodiscard]] static constexpr auto to_constant() -> T {
     constexpr T value = []() {
         constexpr std::array<char, sizeof...(Chars)> chars{Chars...};
         T sum = 0;
@@ -128,7 +119,7 @@ requires HexadecimalNumber<Char0, Char1, Chars...>
 
     return value;
 }
-}
+} // namespace ros::detail
 
 enum class access_type : uint8_t {
     NA    = 0b000'00000,
@@ -169,7 +160,7 @@ namespace error {
         std::cout << "Attempt to assign read-only bits with " << v << std::endl;
         return T{v & Register::layout};
     };
-}
+} // namespace ros::error
 
 // [TODO]: Add disjoint field support
 
@@ -440,8 +431,8 @@ constexpr T get_write_mask (std::tuple<Ts...> const& tup) {
 template <typename reg_derived, 
           detail::msb msb, detail::lsb lsb, 
           access_type at, 
-          FieldType value_type_f = typename reg_derived::value_type>
-requires FieldSelectable<value_type_f, msb, lsb>
+          detail::FieldType value_type_f = typename reg_derived::value_type>
+requires detail::FieldSelectable<value_type_f, msb, lsb>
 struct field {
     using value_type_r = typename reg_derived::value_type;
     using value_type = value_type_f;
@@ -655,7 +646,7 @@ struct register_read {
 template <typename T>
 constexpr bool is_field_v = false;
 
-template <typename Reg, detail::msb msb, detail::lsb lsb, access_type AT, FieldType field_t>
+template <typename Reg, detail::msb msb, detail::lsb lsb, access_type AT, detail::FieldType field_t>
 constexpr bool is_field_v<field<Reg, msb, lsb, AT, field_t>> = true;
 
 
@@ -715,7 +706,7 @@ namespace literals {
 template <char ...Chars>
 constexpr auto operator""_f () {
     using T = std::size_t; // platform max
-    constexpr T new_value = ros::detail::to_unsigned_const<T, Chars...>();
+    constexpr T new_value = ros::detail::to_constant<T, Chars...>();
     
     // std::cout << "<new value>_f = " << new_value << std::endl;
 
@@ -725,7 +716,7 @@ constexpr auto operator""_f () {
 template <char ...Chars>
 constexpr auto operator""_r () {
     using T = std::size_t; // platform max
-    constexpr T new_value = ros::detail::to_unsigned_const<T, Chars...>();
+    constexpr T new_value = ros::detail::to_constant<T, Chars...>();
     
     // std::cout << "<new value>_f = " << new_value << std::endl;
 
@@ -734,21 +725,21 @@ constexpr auto operator""_r () {
 
 template <char ...Chars>
 constexpr auto operator""_msb () {
-    constexpr unsigned new_value = ros::detail::to_unsigned_const<unsigned, Chars...>();
+    constexpr unsigned new_value = ros::detail::to_constant<unsigned, Chars...>();
 
     return detail::msb<unsigned, new_value>{};
 }
 
 template <char ...Chars>
 constexpr auto operator""_lsb () {
-    constexpr unsigned new_value = ros::detail::to_unsigned_const<unsigned, Chars...>();
+    constexpr unsigned new_value = ros::detail::to_constant<unsigned, Chars...>();
 
     return detail::lsb<unsigned, new_value>{};
 }
 
 template <char ...Chars>
 constexpr auto operator""_addr () {
-    constexpr std::size_t new_value = ros::detail::to_unsigned_const<std::size_t, Chars...>();
+    constexpr std::size_t new_value = ros::detail::to_constant<std::size_t, Chars...>();
 
     return detail::addr<std::size_t, new_value>{};
 }
@@ -1266,13 +1257,6 @@ struct my_reg1 : ros::reg<my_reg, uint32_t, 0x3000_addr, mmio_bus> {
 
 
 int main() {
-    // static_assert(std::is_enum_v<unsigned int>);
-    // static_assert(std::is_integral_v<unsigned int>);
-    // auto a = ros::unwrap_enum_t<my_reg::FieldState>{};
-    // std::cout << typeid(a).name() << std::endl;
-    // static_assert(std::is_same_v<ros::unwrap_enum_t<unsigned int>, unsigned int>);
-    // static_assert(std::is_same_v<ros::unwrap_enum_t<my_reg::FieldState>, uint8_t>);
-    // static_assert(std::is_integral_v<ros::unwrap_enum_t<unsigned int>>);
     uint32_t t = 17;
 
     // multi-field write/read syntax
@@ -1297,6 +1281,7 @@ int main() {
     );
 
     // simple op
+    apply(r0.self = 0xf00);
     apply(r0.self = 0xf00_r);
     // multi-write
     apply(r0.self = 0xf00_r,
