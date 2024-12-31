@@ -133,30 +133,33 @@ enum class access_type : uint8_t {
 namespace error {
 
     template <typename Field, typename T = typename Field::value_type>
-    using FieldErrorHandler = typename Field::value_type(*)(T);
+    using field_error_handler = typename Field::value_type(*)(T);
 
     template <typename Field, typename T = typename Field::value_type>
-    constexpr FieldErrorHandler<Field> ignoreHandler = [](T v) -> T {
+    constexpr field_error_handler<Field> ignore_handler = [](T v) -> T {
         std::cout << "ignore handler with " << v << std::endl;
         return T{0};
     };
     template <typename Field, typename T = typename Field::value_type>
-    constexpr FieldErrorHandler<Field> clampHandler = [](T v) -> T {
+    constexpr field_error_handler<Field> clamp_handler = [](T v) -> T {
         using value_type_r = typename Field::value_type_r;
         std::cout << "clamp handler with " << static_cast<value_type_r>(v) << std::endl;
         return T{((1 << Field::length) - 1)};
     };
     template <typename Field>
-    constexpr FieldErrorHandler<Field> handle = clampHandler<Field>;
+    constexpr field_error_handler<Field> field_handle = clamp_handler<Field>;
 
     template <typename Register, typename T = typename Register::value_type>
-    using RegErrorHandler = typename Register::value_type(*)(T);
+    using register_error_handler = typename Register::value_type(*)(T);
 
     template <typename Register, typename T = typename Register::value_type>
-    constexpr RegErrorHandler<Register> maskHandler = [](T v) -> T {
+    constexpr register_error_handler<Register> mask_handler = [](T v) -> T {
         std::cout << "Attempt to assign read-only bits with " << v << std::endl;
         return T{v & Register::layout};
     };
+    template <typename Register>
+    constexpr field_error_handler<Register> register_handle = mask_handler<Register>;
+
 } // namespace ros::error
 
 // [TODO]: Add disjoint field support
@@ -245,7 +248,7 @@ struct safe_register_operations_handler {
 
         value_type value;
         if (rhs & ~Register::layout) {
-            value = ros::error::maskHandler<Register>(rhs);
+            value = ros::error::register_handle<Register>(rhs);
         } else {
             value = rhs;
         }
@@ -260,7 +263,7 @@ struct safe_register_operations_handler {
 
         value_type value;
         if (rhs & ~Register::layout) {
-            value = ros::error::maskHandler<Register>(rhs);
+            value = ros::error::register_handle<Register>(rhs);
         } else {
             value = rhs;
         }
@@ -551,7 +554,7 @@ struct field {
         if (static_cast<value_type_r>(value) <= mask >> lsb.value) {
             safe_val = value;
         } else {
-            safe_val = ros::error::handle<field>(value);
+            safe_val = ros::error::field_handle<field>(value);
         }
 
         return safe_val;
