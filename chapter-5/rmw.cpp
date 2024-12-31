@@ -45,7 +45,7 @@ template <typename T>
 concept derivable_unsigned_integral = std::unsigned_integral<unwrap_enum_t<T>>;
 
 template <typename T, detail::msb msb, detail::lsb lsb>
-concept FieldSelectable = 
+concept field_selectable = 
 (    derivable_unsigned_integral<T>
 ) && (
     msb.value <= std::numeric_limits<T>::digits-1 &&
@@ -53,9 +53,6 @@ concept FieldSelectable =
 ) && (
     msb.value >= lsb.value
 );
-
-template <typename T>
-concept FieldType = std::integral<T> || std::is_enum_v<T>;
 } // namespace ros::detail
 
 namespace detail {
@@ -134,7 +131,7 @@ enum class access_type : uint8_t {
 };
 
 namespace error {
-    
+
     template <typename Field, typename T = typename Field::value_type>
     using FieldErrorHandler = typename Field::value_type(*)(T);
 
@@ -165,15 +162,18 @@ namespace error {
 // [TODO]: Add disjoint field support
 
 namespace detail {
-template <FieldType T, T val>
+template <typename T>
+concept field_type = std::integral<T> || std::is_enum_v<T>;
+
+template <field_type T, T val>
 struct field_value {
     static constexpr T value = val;
 };
 
 template <typename T>
-concept RegisterType = std::integral<T>;
+concept register_type = std::integral<T>;
 
-template <RegisterType T, T val>
+template <register_type T, T val>
 struct register_value {
     static constexpr T value = val;
 };
@@ -431,8 +431,8 @@ constexpr T get_write_mask (std::tuple<Ts...> const& tup) {
 template <typename reg_derived, 
           detail::msb msb, detail::lsb lsb, 
           access_type at, 
-          detail::FieldType value_type_f = typename reg_derived::value_type>
-requires detail::FieldSelectable<value_type_f, msb, lsb>
+          detail::field_type value_type_f = typename reg_derived::value_type>
+requires detail::field_selectable<value_type_f, msb, lsb>
 struct field {
     using value_type_r = typename reg_derived::value_type;
     using value_type = value_type_f;
@@ -469,7 +469,7 @@ struct field {
         return ros::detail::field_assignment_ct<field, val>{};
     }
 
-    // constexpr auto operator= (FieldType auto val) const -> ros::detail::field_assignment_rt<field> {
+    // constexpr auto operator= (field_type auto val) const -> ros::detail::field_assignment_rt<field> {
     //     static_assert(access_type != access_type::RO, "cannot write read-only field");
     //     static_assert(val <= (mask >> lsb.value), "assigned value greater than allowed");
     //     return ros::detail::field_assignment_rt<field>{val};
@@ -646,7 +646,7 @@ struct register_read {
 template <typename T>
 constexpr bool is_field_v = false;
 
-template <typename Reg, detail::msb msb, detail::lsb lsb, access_type AT, detail::FieldType field_t>
+template <typename Reg, detail::msb msb, detail::lsb lsb, access_type AT, detail::field_type field_t>
 constexpr bool is_field_v<field<Reg, msb, lsb, AT, field_t>> = true;
 
 
@@ -679,7 +679,7 @@ struct bus {
     static void write(std::tuple<AdjacentAddrs...> addrs, std::tuple<ValueTypes...> values);
 };
 
-template <typename reg_derived, detail::RegisterType T, detail::addr addr, typename bus_t>
+template <typename reg_derived, detail::register_type T, detail::addr addr, typename bus_t>
 struct reg {
     using reg_der = reg_derived;
     using value_type = T;
@@ -1005,19 +1005,19 @@ template <typename... Ops>
 constexpr bool one_field_assignment_per_apply_v = one_field_assignment_per_apply<Ops...>::value;
 
 template<typename ...Ops>
-concept OneFieldAssignmentPerApply = one_field_assignment_per_apply_v<Ops...>;
+concept one_assignment_per_field = one_field_assignment_per_apply_v<Ops...>;
 
 template<typename Op, typename ...Ops>
-concept SameRegisterOperations = (std::is_same_v<typename Op::type::reg, typename Ops::type::reg> && ...);
+concept same_register = (std::is_same_v<typename Op::type::reg, typename Ops::type::reg> && ...);
 
 template<typename ...Ops>
-concept FieldOperations = (is_field_v<typename Ops::type> && ...);
+concept field_operations = (is_field_v<typename Ops::type> && ...);
 
 template<typename Op, typename ...Ops>
-concept ApplicableFieldOperations = 
-    FieldOperations<Op, Ops...> && 
-    SameRegisterOperations<Op, Ops...> && 
-    OneFieldAssignmentPerApply<Op, Ops...>;
+concept field_constraints = 
+    field_operations<Op, Ops...> and 
+    same_register<Op, Ops...> and
+    one_assignment_per_field<Op, Ops...>;
 
 
 template <typename... Ops>
@@ -1039,22 +1039,23 @@ struct one_register_assignment_per_apply<Op, Ops...> {
 template <typename... Ops>
 constexpr bool one_register_assignment_per_apply_v = one_register_assignment_per_apply<Ops...>::value;
 
-// template<typename ...Ops>
-// concept OneRegisterAssignmentPerApply = one_register_assignment_per_apply_v<Ops...>;
+template<typename ...Ops>
+concept one_assignment_per_register = one_register_assignment_per_apply_v<Ops...>;
 
 template<typename ...Ops>
-concept RegisterOperations = (is_reg_v<typename Ops::type> && ...);
+concept register_operations = (is_reg_v<typename Ops::type> && ...);
 
 template<typename Op, typename ...Ops>
-concept ApplicableRegisterOperations = RegisterOperations<Op, Ops...>;
-
+concept register_constraints = 
+    register_operations<Op, Ops...> and
+    one_assignment_per_register<Op, Ops...>;
 }
 
 // default overload
-void apply(...) {};
+void apply() {};
 
 template<typename Op, typename ...Ops>
-requires detail::ApplicableFieldOperations<Op, Ops...>
+requires detail::field_constraints<Op, Ops...>
 auto apply(Op op, Ops ...ops) -> return_reads_t<decltype(filter::tuple_filter<is_field_read>(std::make_tuple(op, ops...)))> {
     using value_type = typename Op::type::value_type_r;
     using reg = typename Op::type::reg;
@@ -1114,8 +1115,8 @@ auto apply(Op op, Ops ...ops) -> return_reads_t<decltype(filter::tuple_filter<is
 
 
 template<typename Op, typename ...Ops>
-requires detail::ApplicableRegisterOperations<Op, Ops...>
-auto apply(Op op, Ops ...ops) {// -> return_reads_t<decltype(filter::tuple_filter<is_register_read>(std::make_tuple(op, ops...)))> {
+requires detail::register_constraints<Op, Ops...>
+auto apply(Op op, Ops ...ops) -> return_reads_t<decltype(filter::tuple_filter<is_register_read>(std::make_tuple(op, ops...)))> {
     // 1. evaluate reads if any (may make sense to sort)
     // 2. evaluate invocable writes (doesn't make sense to sort. the point of sorting
     //    is to potentially optimize bus utilization. read operations interleaved with
