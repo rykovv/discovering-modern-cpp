@@ -133,7 +133,7 @@ enum class access_type : uint8_t {
 namespace error {
 
     template <typename Field, typename T = typename Field::value_type>
-    using field_error_handler = typename Field::value_type(*)(T);
+    using field_error_handler = T(*)(T);
 
     template <typename Field, typename T = typename Field::value_type>
     constexpr field_error_handler<Field> ignore_handler = [](T v) -> T {
@@ -147,10 +147,10 @@ namespace error {
         return T{((1 << Field::length) - 1)};
     };
     template <typename Field>
-    constexpr field_error_handler<Field> field_handle = clamp_handler<Field>;
+    constexpr field_error_handler<Field> handle_field_error = clamp_handler<Field>;
 
     template <typename Register, typename T = typename Register::value_type>
-    using register_error_handler = typename Register::value_type(*)(T);
+    using register_error_handler = T(*)(T);
 
     template <typename Register, typename T = typename Register::value_type>
     constexpr register_error_handler<Register> mask_handler = [](T v) -> T {
@@ -158,7 +158,7 @@ namespace error {
         return T{v & Register::layout};
     };
     template <typename Register>
-    constexpr field_error_handler<Register> register_handle = mask_handler<Register>;
+    constexpr field_error_handler<Register> handle_register_error = mask_handler<Register>;
 
 } // namespace ros::error
 
@@ -248,7 +248,7 @@ struct safe_register_operations_handler {
 
         value_type value;
         if (rhs & ~Register::layout) {
-            value = ros::error::register_handle<Register>(rhs);
+            value = ros::error::handle_register_error<Register>(rhs);
         } else {
             value = rhs;
         }
@@ -263,7 +263,7 @@ struct safe_register_operations_handler {
 
         value_type value;
         if (rhs & ~Register::layout) {
-            value = ros::error::register_handle<Register>(rhs);
+            value = ros::error::handle_register_error<Register>(rhs);
         } else {
             value = rhs;
         }
@@ -554,7 +554,7 @@ struct field {
         if (static_cast<value_type_r>(value) <= mask >> lsb.value) {
             safe_val = value;
         } else {
-            safe_val = ros::error::field_handle<field>(value);
+            safe_val = ros::error::handle_field_error<field>(value);
         }
 
         return safe_val;
