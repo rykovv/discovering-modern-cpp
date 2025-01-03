@@ -1020,7 +1020,7 @@ constexpr void evaluate_invocable_assignments(std::tuple<InvocableWrites...> wri
 } // namespace ros::detail
 
 namespace detail {
-    
+
 template <typename T>
 constexpr bool is_field_v = false;
 
@@ -1097,7 +1097,8 @@ template<typename Op, typename ...Ops>
 concept register_constraints = 
     register_operations<Op, Ops...> and
     one_assignment_per_register<Op, Ops...>;
-}
+
+} // namespace ros::detail
 
 template<typename Op, typename ...Ops>
 requires detail::field_constraints<Op, Ops...>
@@ -1124,13 +1125,13 @@ auto apply(Op op, Ops ...ops) -> detail::return_reads_t<decltype(detail::tuple_f
     constexpr value_type write_mask = write_mask_ct | write_mask_rt | write_mask_inv;
 
     if constexpr (write_mask != 0) {
-        static_assert(not reg::has_ro_field, "Attempt to write read-only register");
+        static_assert(not reg::has_ro_field, "Attempt to write non-writable register");
 
         constexpr bool is_partial_write = ((rmw_mask & write_mask) != rmw_mask);
         constexpr bool has_invocable_writes = std::tuple_size_v<decltype(writes_inv)> > 0;
 
         if constexpr (is_partial_write || has_invocable_writes) {
-            static_assert(not reg::has_wo_field, "Attempt to read write-only register");
+            static_assert(not reg::has_wo_field, "Attempt to read non-readable register");
             value = bus::template read<value_type>(reg::address::value);
         }
 
@@ -1195,7 +1196,7 @@ auto apply(Op op, Ops ...ops) -> detail::return_reads_t<decltype(detail::tuple_f
 
     auto evaluate_reads = []<typename ...Rs>(std::tuple<Rs...>) /* -> ... */ {
         constexpr bool wo_read_attempt = (Rs::type::has_wo_field or ...);
-        static_assert(not wo_read_attempt, "Attemp to read write-only register");
+        static_assert(not wo_read_attempt, "Attemp to read non-readable register");
 
         return std::make_tuple(
             Rs::type::bus::template read<typename Rs::type::value_type> (
@@ -1217,7 +1218,7 @@ auto apply(Op op, Ops ...ops) -> detail::return_reads_t<decltype(detail::tuple_f
     if constexpr (has_writes_ct) {
         []<typename ...Ws>(std::tuple<Ws...>) -> void {
             constexpr bool ro_write_attempt = (Ws::type::has_ro_field or ...);
-            static_assert(not ro_write_attempt, "Attemp to write read-only register");
+            static_assert(not ro_write_attempt, "Attemp to write non-writable register");
 
             (Ws::type::bus::write(Ws::value, Ws::type::address::value),...);
         }(writes_ct);
@@ -1226,7 +1227,7 @@ auto apply(Op op, Ops ...ops) -> detail::return_reads_t<decltype(detail::tuple_f
     if constexpr (has_writes_rt) {
         []<typename ...Ws>(std::tuple<Ws...> ws) -> void {
             constexpr bool ro_write_attempt = (Ws::type::has_ro_field or ...);
-            static_assert(not ro_write_attempt, "Attemp to write read-only register");
+            static_assert(not ro_write_attempt, "Attemp to write non-writable register");
 
             (Ws::type::bus::write(std::get<Ws>(ws).value, Ws::type::address::value),...);
         }(writes_rt);
