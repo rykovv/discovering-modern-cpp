@@ -844,7 +844,8 @@ constexpr auto tuple_filter(const Tuple& tuple) {
 }
 } // namespace ros::detail
 
-// TODO: add namespace
+namespace detail {
+
 template <typename>
 struct is_field_read {
     static constexpr bool value = false;
@@ -927,8 +928,10 @@ struct return_reads<std::tuple<Ops...>> {
 template <typename ...Ops>
 using return_reads_t = typename return_reads<Ops...>::type;
 
+} // namespace ros::detail
 
 namespace detail {
+
 template <typename T, typename Tuple, std::size_t... Idx>
 constexpr T get_write_value_helper(Tuple tup, std::index_sequence<Idx...>) {
     return (std::tuple_element_t<Idx, Tuple>::type::to_reg(T{0}, std::get<Idx>(tup).value) | ...);
@@ -1014,9 +1017,10 @@ constexpr void evaluate_invocable_assignments(std::tuple<InvocableWrites...> wri
     static_assert(not ro_write_attempt, "Attemp to write read-only register");
     evaluate_invocable_assignments_helper(writes, std::make_index_sequence<sizeof...(InvocableWrites)>{});
 }
-}
+} // namespace ros::detail
 
 namespace detail {
+    
 template <typename T>
 constexpr bool is_field_v = false;
 
@@ -1097,7 +1101,7 @@ concept register_constraints =
 
 template<typename Op, typename ...Ops>
 requires detail::field_constraints<Op, Ops...>
-auto apply(Op op, Ops ...ops) -> return_reads_t<decltype(detail::tuple_filter<is_field_read>(std::make_tuple(op, ops...)))> {
+auto apply(Op op, Ops ...ops) -> detail::return_reads_t<decltype(detail::tuple_filter<detail::is_field_read>(std::make_tuple(op, ops...)))> {
     using value_type = typename Op::type::value_type_r;
     using reg = typename Op::type::reg;
     using bus = typename reg::bus;
@@ -1109,10 +1113,10 @@ auto apply(Op op, Ops ...ops) -> return_reads_t<decltype(detail::tuple_filter<is
     value_type value{};
 
     // compile-time writes
-    auto writes_ct = detail::tuple_filter<is_field_assignment_ct>(operations);
+    auto writes_ct = detail::tuple_filter<detail::is_field_assignment_ct>(operations);
     // runtime writes
-    auto writes_rt = detail::tuple_filter<is_field_assignment_rt>(operations);
-    auto writes_inv = detail::tuple_filter<is_field_assignment_invocable>(operations);
+    auto writes_rt = detail::tuple_filter<detail::is_field_assignment_rt>(operations);
+    auto writes_inv = detail::tuple_filter<detail::is_field_assignment_invocable>(operations);
 
     constexpr value_type write_mask_ct = detail::get_write_mask<value_type>(writes_ct);
     constexpr value_type write_mask_rt = detail::get_write_mask<value_type>(writes_rt);
@@ -1151,13 +1155,13 @@ auto apply(Op op, Ops ...ops) -> return_reads_t<decltype(detail::tuple_filter<is
         return std::make_tuple(Ts::type::to_field(value)...);
     };
 
-    return get_read_fields(detail::tuple_filter<is_field_read>(operations));
+    return get_read_fields(detail::tuple_filter<detail::is_field_read>(operations));
 }
 
 
 template<typename Op, typename ...Ops>
 requires detail::register_constraints<Op, Ops...>
-auto apply(Op op, Ops ...ops) -> return_reads_t<decltype(detail::tuple_filter<is_register_read>(std::make_tuple(op, ops...)))> {
+auto apply(Op op, Ops ...ops) -> detail::return_reads_t<decltype(detail::tuple_filter<detail::is_register_read>(std::make_tuple(op, ops...)))> {
     // 1. evaluate reads if any (may make sense to sort)
     // 2. evaluate invocable writes (doesn't make sense to sort. the point of sorting
     //    is to potentially optimize bus utilization. read operations interleaved with
@@ -1172,12 +1176,12 @@ auto apply(Op op, Ops ...ops) -> return_reads_t<decltype(detail::tuple_filter<is
     auto operations = std::make_tuple(op, ops...);
 
     // compile-time writes
-    auto writes_ct = detail::tuple_filter<is_register_assignment_ct>(operations);
+    auto writes_ct = detail::tuple_filter<detail::is_register_assignment_ct>(operations);
     // runtime writes
-    auto writes_rt = detail::tuple_filter<is_register_assignment_rt>(operations);
-    auto writes_inv = detail::tuple_filter<is_register_assignment_invocable>(operations);
+    auto writes_rt = detail::tuple_filter<detail::is_register_assignment_rt>(operations);
+    auto writes_inv = detail::tuple_filter<detail::is_register_assignment_invocable>(operations);
     // reads
-    auto reads = detail::tuple_filter<is_register_read>(operations);
+    auto reads = detail::tuple_filter<detail::is_register_read>(operations);
 
     constexpr bool has_writes_ct = std::tuple_size_v<decltype(writes_ct)> > 0; 
     constexpr bool has_writes_rt = std::tuple_size_v<decltype(writes_rt)> > 0; 
