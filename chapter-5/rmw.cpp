@@ -8,6 +8,7 @@
 
 // Register Optimization with Safety (ROS)
 
+// file: literals.hpp
 namespace ros {
 namespace detail {
 
@@ -27,6 +28,7 @@ struct addr {
 };
 } // namespace ros::detail
 
+// file: field.hpp
 namespace detail {
 template <typename T, typename enable = void>
 struct unwrap_enum {
@@ -55,6 +57,7 @@ concept field_selectable =
 );
 } // namespace ros::detail
 
+// file: constant.hpp
 namespace detail {
 
 template <char Char>
@@ -132,6 +135,7 @@ requires hex_number<Char0, Char1, Chars...>
 }
 } // namespace ros::detail
 
+// file: ros.hpp
 enum class access_type : uint8_t {
     NA    = 0b000'00000,
     RO    = 0b000'00001,
@@ -144,6 +148,7 @@ enum class access_type : uint8_t {
     W = WO
 };
 
+// file: error.hpp
 namespace error {
 
     template <typename Field, typename T = typename Field::value_type>
@@ -178,6 +183,7 @@ namespace error {
 
 // [TODO]: Add disjoint field support
 
+// file: field.hpp
 namespace detail {
 template <typename T>
 concept field_type = std::integral<T> || std::is_enum_v<T>;
@@ -187,6 +193,7 @@ struct field_value {
     static constexpr T value = val;
 };
 
+// file: register.hpp
 template <typename T>
 concept register_type = std::integral<T>;
 
@@ -196,6 +203,7 @@ struct register_value {
 };
 } // namespace ros::detail
 
+// file: field.hpp
 namespace detail {
 // TODO: remove after breaking down to files
 // forward declaration of operations
@@ -210,6 +218,7 @@ struct field_assignment_invocable;
 template <typename Field>
 struct field_read;
 
+// file: register.hpp
 template <typename Register>
 struct register_assignment;
 template <typename Register, typename Register::value_type val>
@@ -223,6 +232,7 @@ struct register_read;
 } // namespace ros::detail
 
 
+// file: field.hpp
 namespace detail {
 
 template <typename Field>
@@ -244,6 +254,7 @@ struct unsafe_field_operations_handler {
     // TODO: add compile time unsafe operations
 };
 
+// file: register.hpp
 template <typename Register>
 struct safe_register_operations_handler {
     using reg = Register;
@@ -319,6 +330,7 @@ struct unsafe_register_operations_handler {
 };
 } // namespace ros::detail
 
+// file: reflection.hpp
 namespace reflect {
 
 struct universal_type {
@@ -389,6 +401,7 @@ constexpr auto to_tuple(T const& t) {
 }
 } // namespace ros::reflect
 
+// file: register.hpp
 namespace detail {
 
 template <typename T, typename ...Ts, std::size_t ...Idx>
@@ -454,6 +467,7 @@ constexpr bool check_ro_fields (reg const& r) {
 }
 } // namespace ros::detail
 
+// file: field.hpp
 template <typename reg_derived, 
           detail::msb msb, detail::lsb lsb, 
           access_type at, 
@@ -622,6 +636,7 @@ struct field {
     static constexpr detail::unsafe_field_operations_handler<field> unsafe{};
 };
 
+// file: field.hpp
 namespace detail {
 // definitions of operations
 template <typename Field>
@@ -664,6 +679,7 @@ struct field_read {
     using type = Field;
 };
 
+// file: register.hpp
 template <typename Register>
 struct register_assignment {
     using type = Register;
@@ -706,7 +722,7 @@ struct register_read {
 };
 } // namespace ros::detail
 
-
+// file: ros.hpp
 struct bus {
     template <typename T, typename Addr>
     static T read(Addr address);
@@ -718,7 +734,7 @@ struct bus {
     static void write(std::tuple<AdjacentAddrs...> addrs, std::tuple<ValueTypes...> values);
 };
 
-
+// file: register.hpp
 template <typename reg_derived, detail::register_type T, detail::addr addr, typename bus_t>
 struct reg {
     using reg_der = reg_derived;
@@ -734,6 +750,7 @@ struct reg {
     static constexpr ros::detail::safe_register_operations_handler<reg> self{};
 };
 
+// file: literals.hpp
 namespace literals {
 template <char ...Chars>
 constexpr auto operator""_f () {
@@ -777,6 +794,7 @@ constexpr auto operator""_addr () {
 }
 } // namespace ros::literals
 
+// file: filter.hpp
 namespace detail {
 
 template <typename ...Is>
@@ -844,6 +862,7 @@ constexpr auto tuple_filter(const Tuple& tuple) {
 }
 } // namespace ros::detail
 
+// file: type_traits.hpp
 namespace detail {
 
 template <typename>
